@@ -201,6 +201,9 @@ focus = blue.400
 track = gray.750
 fill = blue.500
 
+[slopdot]
+off = gray.750
+
 [tabs]
 line = gray.750
 tabHover = #ffffff08

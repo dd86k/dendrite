@@ -28,6 +28,7 @@ import dentrite.widgets.label;
 import dentrite.widgets.list;
 import dentrite.widgets.menu;
 import dentrite.widgets.progress;
+import dentrite.widgets.slopdot;
 import dentrite.widgets.radio;
 import dentrite.widgets.slider;
 import dentrite.widgets.spinbox;
@@ -99,6 +100,7 @@ Page[] pages(Gallery g)
         Page("Combo boxes", "Drop-down lists, editable boxes with suggestions, long lists.", () => comboPage()),
         Page("Sliders", "A number in a range, dragged or stepped with keys.", () => slidersPage()),
         Page("Progress bars", "Work done as a fraction, or busy when unknown.", () => progressPage()),
+        Page("Slop dots", "Glowing status lights, still or pulsing rings.", () => slopDotsPage()),
         Page("Images", "Pictures in each fit, tinted, at 2x, as icons and opened from files.", () => imagesPage(g)),
         Page("Tabs", "Tab views over pages, and tab bars with closable tabs.", () => tabsPage()),
         Page("Menus", "Menu bar, popup menus from a button, context menus.", () => menusPage(g)),
@@ -1097,6 +1099,31 @@ Node progressPage()
             captioned("60%", narrow(320, progressBar(() => 0.6))),
             captioned("100%", narrow(320, progressBar(() => 1.0))),
             captioned("Full width", progressBar(() => 0.75)),
+        )),
+    );
+}
+
+/// Slop dots: each color pulsing, each state, and one driven by a combo box.
+Node slopDotsPage()
+{
+    Signal!DotState state = signal(DotState.pulsing);
+    Node colors(DotState st)
+    {
+        Node[] dots;
+        foreach (string v; ["green", "purple", "cyan", "amber", "pink", "red", "indigo"])
+        {
+            dots ~= captioned(v, pad(14)(slopDot(() => st, v)));
+        }
+        return row(gap: 28)(dots);
+    }
+    return column(gap: 22)(
+        section("Pulsing", colors(DotState.pulsing)),
+        section("On", colors(DotState.on)),
+        section("Off", colors(DotState.off)),
+        section("Driven by a signal", column(gap: 10, cross: CrossAlign.start)(
+            row(gap: 10)(slopDot(() => state.get, tooltip: "Follows the combo box", accessName: "Status"),
+                label("All systems operational")),
+            comboBox(state),
         )),
     );
 }

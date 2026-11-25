@@ -53,6 +53,7 @@ The slider and the spin box share `s.width`, so either one moves the other.
 | `slider(signal, min, max, step)` | `slider` | Sliders |
 | `comboBox(items, signal)`, `comboBox(enumSignal)` | `combobox` | Combo boxes |
 | `progressBar(() => fraction)` | `progress` | Progress bars |
+| `slopDot(() => DotState.pulsing, variant)` | `slopdot` | Slop dots |
 | `iconView(icon)`, `imageView(image, fit)` | `icons`, `image` | Images |
 | `tabs(signal)(tab(title, page)...)`, `tabBar(titles, signal)` | `tabs` | Tabs |
 | `listItem(onClick:, selected:)(content)` | `list` | Lists |

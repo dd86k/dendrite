@@ -30,6 +30,7 @@ import dentrite.widgets.combobox : ComboBoxStyle;
 import dentrite.widgets.dialog : DialogStyle;
 import dentrite.widgets.menu : MenuBarStyle, MenuStyle;
 import dentrite.widgets.progress : ProgressStyle;
+import dentrite.widgets.slopdot : SlopDotStyle;
 import dentrite.widgets.radio : RadioStyle;
 import dentrite.widgets.slider : SliderStyle;
 import dentrite.widgets.spinbox : SpinBoxStyle;
@@ -57,7 +58,7 @@ struct WindowStyle
 alias LibraryStyles = AliasSeq!(WindowStyle, TextStyle, ButtonStyle, CheckboxStyle, TextBoxStyle, ListStyle,
     PanelStyle, ScrollStyle, SeparatorStyle, DockStyle, PopupStyle, MenuStyle, MenuBarStyle, ComboBoxStyle,
     TooltipStyle, RadioStyle, SliderStyle, ProgressStyle, TabsStyle, SpinBoxStyle, TreeStyle, TableStyle,
-    DialogStyle, TextAreaStyle, IslandStyle, SplitViewStyle);
+    DialogStyle, TextAreaStyle, IslandStyle, SplitViewStyle, SlopDotStyle);
 
 /// Timings and sizes of the last frame.
 struct FrameStats
