@@ -14,6 +14,7 @@ configuration "unittest" {
     importPaths "core/source" "gl33/source" "sdl3/source"
     libs "freetype" "harfbuzz" "SDL3"
     lflags "/LIBPATH:$PACKAGE_DIR/winlibs" platform="windows"
+    copyFiles "winlibs/*.dll" platform="windows"
 }
 
 // `dub test -c unittest-static`, with SDL3 linked in like `dentrite:sdl3/static`.
@@ -63,8 +64,10 @@ subPackage {
     dependency "dentrite:core" version="*"
     dependency "dentrite:gl33" version="*"
 
+    // On Windows, the DLLs in winlibs/ go next to the program.
     configuration "dynamic" {
         libs "SDL3"
+        copyFiles "winlibs/*.dll" platform="windows"
     }
 
     // SDL3 linked in from winlibs/, built by `rdmd tools/winlibs.d --sdl3`, which also checks the system

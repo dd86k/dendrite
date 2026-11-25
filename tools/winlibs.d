@@ -9,7 +9,8 @@
 /// it uses cc, c++ and ar, which for FreeType and HarfBuzz is only useful for checking the build. SDL3 builds
 /// with CMake, and Ninja when found.
 /// NOTE: FreeType gets the modules dentrite needs: TrueType and CFF outlines, the autohinter, the smooth
-/// rasterizer and bundled zlib for WOFF. Type 1, bitmap font formats, SDF and SVG are left out.
+/// rasterizer, and zlib and libpng compiled into the same library for WOFF and PNG color emoji (CBDT). Type 1,
+/// bitmap font formats, SDF and SVG are left out.
 module winlibs;
 
 import std.algorithm.searching : all, any, canFind, endsWith, startsWith;
@@ -28,6 +29,10 @@ import std.zip : ArchiveMember, ZipArchive;
 
 /// FreeType version downloaded by a bare `--freetype`.
 enum freetypeDefault = "2.13.3";
+/// zlib version FreeType is built with.
+enum zlibVersion = "1.4";
+/// libpng version FreeType is built with.
+enum libpngVersion = "1.6.59";
 /// HarfBuzz version downloaded by a bare `--harfbuzz`.
 enum harfbuzzDefault = "15.2.0";
 /// SDL3 version downloaded by a bare `--sdl3`.
@@ -47,6 +52,25 @@ immutable string[] freetypeSources = [
     "src/base/ftbitmap.c", "src/base/ftglyph.c", "src/base/ftmm.c", "src/base/ftstroke.c", "src/base/ftsynth.c",
     "src/autofit/autofit.c", "src/cff/cff.c", "src/gzip/ftgzip.c", "src/psaux/psaux.c", "src/pshinter/pshinter.c",
     "src/psnames/psnames.c", "src/sfnt/sfnt.c", "src/smooth/smooth.c", "src/truetype/truetype.c",
+];
+
+/// zlib sources, the gz file functions left out.
+immutable string[] zlibSources = [
+    "adler32.c", "compress.c", "crc32.c", "deflate.c", "inffast.c", "inflate.c", "inftrees.c", "trees.c",
+    "uncompr.c", "zutil.c",
+];
+
+/// libpng sources.
+immutable string[] libpngSources = [
+    "png.c", "pngerror.c", "pngget.c", "pngmem.c", "pngpread.c", "pngread.c", "pngrio.c", "pngrtran.c",
+    "pngrutil.c", "pngset.c", "pngtrans.c", "pngwio.c", "pngwrite.c", "pngwtran.c", "pngwutil.c",
+];
+
+/// FreeType options for PNG glyphs and the zlib above, and libpng without the SIMD sources in its CPU directories.
+immutable string[] freetypeDefines = [
+    "FT2_BUILD_LIBRARY", "FT_CONFIG_OPTION_USE_PNG", "FT_CONFIG_OPTION_SYSTEM_ZLIB", "PNG_ARM_NEON_OPT=0",
+    "PNG_INTEL_SSE_OPT=0", "PNG_MIPS_MSA_OPT=0", "PNG_MIPS_MMI_OPT=0", "PNG_POWERPC_VSX_OPT=0",
+    "PNG_LOONGARCH_LSX_OPT=0", "PNG_RISCV_RVV_OPT=0",
 ];
 
 /// FreeType functions HarfBuzz looks for at configure time, all present since FreeType 2.11.
@@ -167,8 +191,9 @@ string unzip(string zip, string dir, string[] keep)
     return tree;
 }
 
-/// Compiles FreeType from `src` into a static library in `outDir`.
-void buildFreetype(Tools tools, string src, string outDir)
+/// Compiles FreeType from `src`, with zlib from `zlibSrc` and libpng from `pngSrc`, into a static library in
+/// `outDir`.
+void buildFreetype(Tools tools, string src, string zlibSrc, string pngSrc, string outDir)
 {
     stage("FreeType: module list");
     string inc = buildPath(outDir, "include");
@@ -195,13 +220,22 @@ void buildFreetype(Tools tools, string src, string outDir)
     mkdirRecurse(dirName(modules));
     write(modules, "/* Modules dentrite needs, written by tools/winlibs.d */\n" ~ kept.join("\n") ~ "\n");
     step(format("%s modules: %-(%s, %)", kept.length, freetypeModules));
+    copy(buildPath(pngSrc, "scripts/pnglibconf.h.prebuilt"), buildPath(inc, "pnglibconf.h"));
     string[] files;
     foreach (string f; freetypeSources)
     {
         files ~= buildPath(src, f);
     }
-    build(tools, "FreeType", "freetype", files, [inc, buildPath(src, "include")], ["FT2_BUILD_LIBRARY"], false,
-        outDir);
+    foreach (string f; zlibSources)
+    {
+        files ~= buildPath(zlibSrc, f);
+    }
+    foreach (string f; libpngSources)
+    {
+        files ~= buildPath(pngSrc, f);
+    }
+    build(tools, "FreeType", "freetype", files, [inc, buildPath(src, "include"), zlibSrc, pngSrc],
+        freetypeDefines.dup, false, outDir);
 }
 
 /// Compiles HarfBuzz from `src`, with FreeType functions from the headers in `ftSrc`, into a static library in
@@ -274,8 +308,8 @@ void build(Tools tools, string label, string name, string[] files, string[] incl
     run(tools, tools.msvc ? [tools.ar, "/nologo", "/OUT:" ~ lib] ~ objs : [tools.ar, "rcs", lib] ~ objs);
 }
 
-/// Builds SDL3 from `src` as a static library with CMake, copies it into `outDir` and checks the libraries it
-/// links against those `dubFile` names.
+/// Builds SDL3 from `src` with CMake as a static library, on Windows also as SDL3.dll with its import library,
+/// copies them into `outDir` and checks the libraries it links against those `dubFile` names.
 void buildSdl(Tools tools, string src, string outDir, string dubFile)
 {
     stage("SDL: configure");
@@ -297,9 +331,11 @@ void buildSdl(Tools tools, string src, string outDir, string dubFile)
     {
         cmd ~= ["-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=" ~ ninja];
     }
-    // The lib directory is pinned so a distribution's lib64 can't move the archive
+    // The lib directory is pinned so a distribution's lib64 can't move the archive. Only Windows needs the DLL,
+    // Linux has a system SDL3 for the dynamic configuration.
     cmd ~= ["-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INSTALL_PREFIX=" ~ prefix, "-DCMAKE_INSTALL_LIBDIR=lib",
-        "-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TESTS=OFF", "-DSDL_TEST_LIBRARY=OFF", "-DSDL_EXAMPLES=OFF"];
+        "-DSDL_SHARED=" ~ (tools.msvc ? "ON" : "OFF"), "-DSDL_STATIC=ON", "-DSDL_TESTS=OFF",
+        "-DSDL_TEST_LIBRARY=OFF", "-DSDL_EXAMPLES=OFF"];
     if (tools.msvc)
     {
         // NOTE: cl can't write its precompiled header on a VM shared folder
@@ -315,10 +351,13 @@ void buildSdl(Tools tools, string src, string outDir, string dubFile)
     stage("SDL: compile");
     run(tools, [cmake, "--build", dir, "--config", "Release"]);
     run(tools, [cmake, "--install", dir, "--config", "Release"], true);
-    string name = tools.msvc ? "SDL3-static.lib" : "libSDL3.a";
-    string lib = buildPath(outDir, name);
-    stage("SDL: copy " ~ lib);
-    copy(buildPath(prefix, "lib", name), lib);
+    string[] files = tools.msvc ? ["lib/SDL3-static.lib", "lib/SDL3.lib", "bin/SDL3.dll"] : ["lib/libSDL3.a"];
+    stage("SDL: copy into " ~ outDir);
+    foreach (string f; files)
+    {
+        step(f);
+        copy(buildPath(prefix, f), buildPath(outDir, pathSplitter(f).back));
+    }
     checkDubLibs(readText(buildPath(prefix, "lib", "pkgconfig", "sdl3.pc")), dubFile);
 }
 
@@ -568,7 +607,12 @@ int main(string[] args)
                 ["include/", "src/"]);
             if (freetype.length > 0)
             {
-                buildFreetype(tools, ftSource, outDir);
+                string zlibSource = sources("zlib", zlibVersion, srcDir,
+                    "https://github.com/madler/zlib/archive/refs/tags/v%s.zip", ".", "inflate.c", null);
+                string pngSource = sources("libpng", libpngVersion, srcDir,
+                    "https://github.com/pnggroup/libpng/archive/refs/tags/v%s.zip", ".",
+                    "scripts/pnglibconf.h.prebuilt", null);
+                buildFreetype(tools, ftSource, zlibSource, pngSource, outDir);
             }
             if (harfbuzz.length > 0)
             {

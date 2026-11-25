@@ -92,15 +92,18 @@ dub test -c unittest-static                # test every subpackage against it
 ```
 
 The tool warns when SDL lists a system library the `static` configuration in
-`dub.sdl` lacks.
+`dub.sdl` lacks. On Windows it also builds `SDL3.lib` and `SDL3.dll` for the
+dynamic configuration.
 
 ### Windows
 
 - dub links `SDL3.lib`, `freetype.lib`, `harfbuzz.lib`, also from `winlibs/`.
 - `rdmd tools/winlibs.d --freetype --harfbuzz` builds static FreeType and
-  HarfBuzz into `winlibs/` (needs Visual Studio C++ tools).
-- Put `SDL3.lib` in `winlibs/`, and `SDL3.dll` (plus optional
-  `SDL3_image.dll`) next to the program. Or link SDL3 in, see Static SDL.
+  HarfBuzz into `winlibs/` (needs Visual Studio C++ tools). FreeType gets zlib
+  and libpng compiled in, for color emoji.
+- `rdmd tools/winlibs.d --sdl3` builds `SDL3.lib` and `SDL3.dll`, or take them
+  from SDL's VC release. DLLs in `winlibs/`, such as `SDL3.dll` and the
+  optional `SDL3_image.dll`, are copied next to the program.
 
 ## Modules
 
