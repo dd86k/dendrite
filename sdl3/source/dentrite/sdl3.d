@@ -22,6 +22,7 @@ import dentrite.text : GlyphAtlas;
 import std.math : ceil;
 import std.algorithm.comparison : max, min;
 import std.algorithm.mutation : remove;
+import std.algorithm.sorting : sort;
 import std.exception : enforce;
 import std.process : environment;
 import std.stdio : stderr;
@@ -789,18 +790,22 @@ final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, T
             break;
         case SDL_EventType.windowMoved:
         case SDL_EventType.windowShown:
+        case SDL_EventType.windowMaximized:
+        case SDL_EventType.windowRestored:
             if (from !is null)
             {
                 break;
             }
-            e.kind = EventKind.resized; // the popup area moved with it
+            // the popup area moved with it
+            e.kind = s.type == SDL_EventType.windowMoved ? EventKind.resized : EventKind.shown;
             if (access !is null)
             {
                 access.windowMoved(win);
             }
             break;
         case SDL_EventType.windowHidden:
-            e.kind = from is null ? EventKind.none : EventKind.dismissed;
+        case SDL_EventType.windowMinimized:
+            e.kind = from is null ? EventKind.hidden : EventKind.dismissed;
             break;
         case SDL_EventType.windowFocusGained:
             if (access !is null)
@@ -1163,15 +1168,37 @@ final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, T
         SDL_SetWindowMinimumSize(win, toWindow(max(0, w)), toWindow(max(0, h)));
     }
 
-    /// Sets the window icon from `img`, which SDL copies.
-    void setIcon(Image img)
+    /// Sets the window icon from `icons`, which SDL copies. The smallest is the icon at 100% scale, the others
+    /// its alternate sizes.
+    void setIcon(Image[] icons)
     {
-        withSurface(img, (SDL_Surface* s) {
+        Image[] bySize = icons.dup;
+        bySize.sort!((a, b) => a.width < b.width);
+        ubyte[][] pixels; // NOTE: SDL wraps these until the icon is set, so they stay referenced here
+        SDL_Surface*[] surfaces;
+        foreach (Image img; bySize)
+        {
+            ubyte[] px = img.straight();
+            SDL_Surface* s = SDL_CreateSurfaceFrom(img.width, img.height, SDL_PIXELFORMAT_ABGR8888, px.ptr,
+                img.width * 4);
             if (s !is null)
             {
-                SDL_SetWindowIcon(win, s);
+                pixels ~= px;
+                surfaces ~= s;
             }
-        });
+        }
+        if (surfaces.length > 0)
+        {
+            foreach (SDL_Surface* a; surfaces[1 .. $])
+            {
+                SDL_AddSurfaceAlternateImage(surfaces[0], a);
+            }
+            SDL_SetWindowIcon(win, surfaces[0]);
+        }
+        foreach (SDL_Surface* s; surfaces)
+        {
+            SDL_DestroySurface(s);
+        }
     }
 
     /// Starts or stops SDL text events, on the popup windows too, as the topmost popup menu takes keyboard focus.

@@ -72,6 +72,9 @@ enum SDL_EventType : uint
     windowMoved = 0x205,
     windowResized = 0x206,
     windowPixelSizeChanged = 0x207,
+    windowMinimized = 0x209,
+    windowMaximized = 0x20A,
+    windowRestored = 0x20B,
     windowMouseLeave = 0x20D,
     windowFocusGained = 0x20E,
     windowFocusLost = 0x20F,
@@ -306,6 +309,7 @@ bool SDL_UpdateWindowSurface(SDL_Window* window);       /// presents the window 
 bool SDL_SetWindowSurfaceVSync(SDL_Window* window, int vsync); /// 1 for vsync on surface updates
 SDL_Surface* SDL_CreateSurfaceFrom(int w, int h, uint format, void* pixels, int pitch); /// wraps pixels
 void SDL_DestroySurface(SDL_Surface* surface);          /// frees a surface, not wrapped pixels
+bool SDL_AddSurfaceAlternateImage(SDL_Surface* surface, SDL_Surface* image); /// adds another size, referenced
 bool SDL_SetSurfaceBlendMode(SDL_Surface* surface, uint mode); /// how blits from it blend, 0 copies
 /// Copies `src` into `dst` with format conversion, null rects for whole surfaces.
 bool SDL_BlitSurface(SDL_Surface* src, const(SDL_Rect)* srcRect, SDL_Surface* dst, const(SDL_Rect)* dstRect);

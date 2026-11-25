@@ -86,7 +86,8 @@ passes on the rest.
 - `popupMenu(items...)` makes a menu to open from code, such as from a
   button: `m.toggle(button)` opens it below the button, or closes it.
 - `contextMenu(items...)(content)` opens on a right click in `content`, or
-  Shift+F10 and the menu key while it has focus.
+  Shift+F10 and the menu key while it has focus. Screen readers can open it
+  from any control inside.
 
 A menu, combo box list or tooltip that does not fit in the window opens in
 a popup window of its own, past the window edges, along with the popups

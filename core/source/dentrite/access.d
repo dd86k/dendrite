@@ -274,7 +274,7 @@ final class AccessTree
         root.bounds = Rect(0, 0, t.viewport.w, t.viewport.h);
         AccessActions[ulong] by;
         parts = null;
-        collect(t.root, root.children, now, byId, by, null);
+        collect(t.root, root.children, now, byId, by, null, false);
         now[root.id] = root;
         AccessUpdate u;
         u.root = accessRootId;
@@ -351,10 +351,11 @@ final class AccessTree
     }
 
     /// Adds the exposed nodes under `n` to `into`, their descriptions to `now`, and `owner` as the action handler
-    /// of each when set.
+    /// of each when set. `menu` is set inside a node with a context menu.
     private void collect(Node n, ref ulong[] into, ref AccessNode[ulong] now, ref Node[ulong] byId,
-        ref AccessActions[ulong] by, AccessActions owner)
+        ref AccessActions[ulong] by, AccessActions owner, bool menu)
     {
+        menu = menu || n.hasContextMenu;
         Node[] kids = n.children;
         if (AccessContent ac = cast(AccessContent) n)
         {
@@ -375,7 +376,7 @@ final class AccessTree
             }
             if (a.role == Role.none)
             {
-                collect(c, into, now, byId, by, owner);
+                collect(c, into, now, byId, by, owner, menu);
                 continue;
             }
             if (c.accessName !is null)
@@ -394,13 +395,17 @@ final class AccessTree
             {
                 a.allow(AccessAction.focus);
             }
+            if ((menu || c.hasContextMenu) && a.disabled == false)
+            {
+                a.allow(AccessAction.showContextMenu);
+            }
             AccessNode an;
             an.id = accessIdOf(c);
             an.info = a;
             an.bounds = c.bounds;
             if (a.leaf == false)
             {
-                collect(c, an.children, now, byId, by, owner);
+                collect(c, an.children, now, byId, by, owner, menu);
             }
             if (AccessParts p = cast(AccessParts) c)
             {

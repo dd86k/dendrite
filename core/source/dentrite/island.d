@@ -312,9 +312,15 @@ final class Island : Node, Updatable, FocusScope, Composer, AccessContent, Acces
         return ui is null || ui.focus == 0 ? null : ui.nodeOf(ui.focus);
     }
 
-    /// Clicks, focuses or steps the control of the last pass that `n` shows. Steps are the arrow keys.
+    /// Clicks, focuses or steps the control of the last pass that `n` shows, or opens the context menu of the
+    /// area holding `n`. Steps are the arrow keys.
     bool accessActionFor(Node n, ref const AccessRequest r)
     {
+        if (r.action == AccessAction.showContextMenu)
+        {
+            Rect b = n.bounds;
+            return ui.openContextMenu(Point(b.x, b.y + min(b.h, 32f)), Point(b.x + b.w / 2, b.y + b.h / 2), true);
+        }
         Id i = ui.idOf(n);
         if (i == 0)
         {

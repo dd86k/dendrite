@@ -1429,6 +1429,25 @@ final class DockView : Node, WindowKeys
         }
     }
 
+    /// Raises the floating window under a press at window point `p`, its content included.
+    override void onPressInside(Point p)
+    {
+        raiseAt(p - bounds.pos);
+    }
+
+    /// Puts the floating window under local point `p` on top. Its index after, or -1 when `p` is in none.
+    private ptrdiff_t raiseAt(Point p)
+    {
+        DockHit h = hitAt(p);
+        ptrdiff_t w = h.node is null ? -1 : space.windowOf(h.node);
+        if (w >= 0 && w + 1 < space.floating.length)
+        {
+            w = space.raise(w);
+            sync();
+        }
+        return w;
+    }
+
     /// Starts what a press at `p` grabs: a tab, selected at once, a floating window's bar or border, or a
     /// splitter. A press in a floating window raises it.
     private void press(Point p)
@@ -1436,12 +1455,7 @@ final class DockView : Node, WindowKeys
         DockHit h = hitAt(p);
         grab = h;
         grabAt = p;
-        ptrdiff_t w = h.node is null ? -1 : space.windowOf(h.node);
-        if (w >= 0 && w + 1 < space.floating.length)
-        {
-            w = space.raise(w);
-            sync();
-        }
+        ptrdiff_t w = raiseAt(p);
         final switch (h.kind)
         {
         case DockHit.Kind.none:
@@ -1877,6 +1891,43 @@ unittest
     assert(f.v.drop.kind == Drop.Kind.zone && f.v.drop.stack is f.v.space.find("source"));
     f.end();
     assert(f.v.space.floating.length == 0 && f.v.space.find("source").panes == ["source", "watch"]);
+}
+
+// A press on the content of a lower floating window raises it, and the content still gets the press.
+unittest
+{
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.host : Host;
+    import dentrite.platform : WindowOptions;
+    import dentrite.widgets.button : button;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    Host h = new Host(new HeadlessPlatform(1004, 604), new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    int clicks;
+    Node[string] ps;
+    foreach (string id; ["source", "breakpoints", "watch"])
+    {
+        ps[id] = new Fixed(Size.init);
+    }
+    ps["memory"] = button("Memory", onClick: () { ++clicks; });
+    DockView v = new DockView(sample(), ps, null);
+    v.space.undock("memory", Rect(100, 100, 300, 200));
+    v.space.undock("watch", Rect(300, 150, 300, 200));
+    v.sync();
+    h.setRoot(v);
+    h.frame();
+    Point p = Point(ps["memory"].bounds.x + 5, ps["memory"].bounds.y + 5);
+    assert(v.space.windowOf(v.space.find("memory")) == 0 && v.hitTest(p, Point(0, 0)) is ps["memory"]);
+    h.inject(PointerKind.down, p);
+    h.inject(PointerKind.up, p);
+    h.frame();
+    assert(v.space.windowOf(v.space.find("memory")) == 1 && clicks == 1);
 }
 
 // Floating windows move by the tab bar, resize by the border, rise when pressed, and Escape puts them back.

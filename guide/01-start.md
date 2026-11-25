@@ -69,11 +69,11 @@ struct, variants included. Set `o.themePath` to a theme file to change it,
 see [chapter 8](08-themes.md). The examples use
 `examples/themes/dark.theme`, which is a good file to copy.
 
-Once open, `w.title`, `w.visible`, `w.minimumSize` and `w.icon` change the
-window. `WindowOptions.minWidth` and `minHeight` set the minimum size up
-front. `w.sdlWindow` gives the SDL window for anything else, but use the
-setters where they exist: the title also names the window for screen
-readers, and hiding ends presses and hover.
+Once open, `w.title`, `w.visible`, `w.minimumSize` and `w.icon`, which
+takes one image per size, change the window. `WindowOptions.minWidth` and
+`minHeight` set the minimum size up front. `w.sdlWindow` gives the SDL window
+for anything else, but use the setters where they exist: the title also names
+the window for screen readers, and hiding ends presses and hover.
 
 ## Builders
 

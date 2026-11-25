@@ -41,6 +41,7 @@ import dentrite.widgets.textbox : TextBoxStyle;
 import dentrite.widgets.tooltip : TooltipStyle, Tooltips;
 import dentrite.widgets.tree : TreeStyle;
 import std.algorithm.comparison : max, min;
+import std.algorithm.searching : all;
 import std.math : abs, ceil, round;
 import std.meta : AliasSeq;
 import std.stdio : stderr;
@@ -129,6 +130,7 @@ class Host : Services
     private Point mouse;            /// pointer, logical
     private bool pointerIn;         /// pointer is over the window
     private MonoTime frameTime;     /// start of the current frame
+    private bool hidden;            /// window hidden or minimized, `run` draws no frames
     private CursorShape cursorShown; /// cursor last set on the platform
     private bool textInputOn;       /// platform text input enabled
     private bool textHiddenOn;      /// platform text input is for a password
@@ -174,6 +176,7 @@ class Host : Services
         mesh = new FrameMesh;
         compositor.cache = o.cachePaint;
         clock = FrameClock(o.maxFps);
+        hidden = o.hidden;
         sizeNow = signal(Size.init);
         updateSize();
     }
@@ -392,13 +395,14 @@ class Host : Services
 
     // Loop
 
-    /// Runs frames until `running` is set to false, the window closes or the system asks to quit.
+    /// Runs frames until `running` is set to false, the window closes or the system asks to quit. Frames wait
+    /// while the window is hidden or minimized.
     void run()
     {
         while (running)
         {
             Event e;
-            if (platform.wait(e, clock.timeout(MonoTime.currTime)))
+            if (platform.wait(e, hidden ? Duration.max : clock.timeout(MonoTime.currTime)))
             {
                 handle(e);
                 while (platform.wait(e, Duration.zero))
@@ -406,7 +410,7 @@ class Host : Services
                     handle(e);
                 }
             }
-            if (clock.due(MonoTime.currTime))
+            if (hidden == false && clock.due(MonoTime.currTime))
             {
                 frame();
             }
@@ -652,7 +656,7 @@ class Host : Services
     }
 
     /// Runs what an assistive technology asked for: focus and scrolling here, the rest by the node or the
-    /// `AccessActions` node holding it.
+    /// `AccessActions` node holding it, and a context menu by the nearest node with one.
     private void runAccess(ref const AccessRequest r)
     {
         Node n = access.nodeOf(r.target);
@@ -683,9 +687,18 @@ class Host : Services
         }
         else if (n.accessAction(r) == false)
         {
-            if (AccessActions h = access.handlerOf(r.target))
+            AccessActions h = access.handlerOf(r.target);
+            bool done = h !is null && h.accessActionFor(n, r);
+            if (done == false && r.action == AccessAction.showContextMenu)
             {
-                h.accessActionFor(n, r);
+                Rect b = n.bounds;
+                for (Node m = n; m !is null; m = m.parent)
+                {
+                    if (m.onContextMenu(Point(b.x, b.y + min(b.h, 32f)), true))
+                    {
+                        break;
+                    }
+                }
             }
         }
         requestFrame();
@@ -710,7 +723,17 @@ class Host : Services
         case EventKind.resized:
             updateSize();
             break;
+        case EventKind.hidden:
+            hidden = true;
+            break;
+        case EventKind.shown:
+            hidden = false;
+            updateSize();
+            break;
         case EventKind.exposed:
+            hidden = false;
+            requestFrame();
+            break;
         case EventKind.wake:
             requestFrame();
             break;
@@ -897,6 +920,15 @@ class Host : Services
         {
             setHover(interactiveAt(e.pos));
             return;
+        }
+        Node[] path;
+        for (Node n = reachableAt(e.pos); n !is null; n = n.parent)
+        {
+            path ~= n;
+        }
+        foreach (Node n; path)
+        {
+            n.onPressInside(e.pos);
         }
         if (e.button == 1 && holdPress(e))
         {
@@ -1476,6 +1508,7 @@ class Host : Services
             handle(left);
         }
         c.setVisible(on);
+        hidden = on == false;
         updateSize();
     }
 
@@ -1488,13 +1521,14 @@ class Host : Services
         }
     }
 
-    /// Sets the icon the window system shows for the window, such as one from `loadImage`.
-    void icon(Image img)
+    /// Sets the icon the window system shows for the window, such as one from `loadImage`. Several sizes let
+    /// it pick the closest: `h.icon(icon16, icon32, icon64)`.
+    void icon(Image[] sizes...)
     {
-        assert(img !is null && img.empty == false);
+        assert(sizes.length > 0 && sizes.all!(i => i !is null && i.empty == false));
         if (WindowControl c = cast(WindowControl) platform)
         {
-            c.setIcon(img);
+            c.setIcon(sizes.dup);
         }
     }
 
@@ -1626,7 +1660,8 @@ unittest
     assert(asked == 2 && h.running == false);
 }
 
-// Window setters reach the platform, the title names the window for screen readers, and hiding ends a press.
+// Window setters reach the platform, the title names the window for screen readers, and hiding ends a press
+// and stops frames until the window shows or is exposed.
 unittest
 {
     import dentrite.backend.software : SoftwareRenderer;
@@ -1658,16 +1693,25 @@ unittest
     h.minimumSize(320, 200);
     assert(p.minSize == [320, 200]);
     Image img = new Image(2, 2);
-    h.icon(img);
-    assert(p.icon is img);
+    Image big = new Image(4, 4);
+    h.icon(img, big);
+    assert(p.icon == [img, big]);
 
     Point at = Point(b.bounds.x + 4, b.bounds.y + 4);
     h.inject(PointerKind.down, at);
     assert(b.pressed);
     h.visible = false;
     assert(h.visible == false && p.hidden && b.pressed == false && b.hovered == false);
+    assert(h.hidden, "frames wait while hidden");
     h.visible = true;
-    assert(h.visible);
+    assert(h.visible && h.hidden == false);
+
+    Event e = Event(EventKind.hidden);
+    h.handle(e);
+    assert(h.hidden, "minimized");
+    e.kind = EventKind.exposed;
+    h.handle(e);
+    assert(h.hidden == false && h.clock.requested, "exposed draws again");
 }
 
 // A frame-start hook changing the tree asks for no new frame, `requestFrame` in it does.

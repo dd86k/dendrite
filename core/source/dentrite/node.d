@@ -627,6 +627,7 @@ abstract class Node
     bool keepFocus;      /// a press inside leaves focus where it is, as on a menu bar
     bool textInput;      /// wants text input events while focused
     bool hiddenText;     /// its text input is a password, so the platform keeps input methods off where it can
+    bool hasContextMenu; /// opens a context menu for its content, so screen readers offer it on the nodes inside
     CursorShape cursor;  /// cursor shape while hovered
     /// Drag directions it uses itself, such as a canvas. A press on it is not held back for a `DragScroller`,
     /// which can still take drags the other way.
@@ -1000,6 +1001,12 @@ abstract class Node
     bool onContextMenu(Point p, bool keyboard)
     {
         return false;
+    }
+
+    /// Called on the node under a press at window point `p` and on its ancestors, innermost first, before the
+    /// press is delivered. For containers that react to any press inside, such as raising a floating window.
+    void onPressInside(Point p)
+    {
     }
 
     /// Called when the node gains or loses keyboard focus.

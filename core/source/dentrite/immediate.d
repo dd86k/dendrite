@@ -613,6 +613,13 @@ final class Ui
     {
         Rect f = lastRect(focus);
         Point probe = keyboard && focus != 0 ? Point(f.x + f.w / 2, f.y + f.h / 2) : p;
+        return openContextMenu(p, probe, keyboard);
+    }
+
+    /// Opens at window point `p` the context menu of the last pass's innermost area holding `probe`, with the
+    /// first item highlighted when `keyboard`. True if one opened.
+    bool openContextMenu(Point p, Point probe, bool keyboard)
+    {
         foreach_reverse (ContextArea a; lastAreas)
         {
             if (lastRect(a.id).contains(probe) && a.open(p, keyboard))

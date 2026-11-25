@@ -82,6 +82,8 @@ enum EventKind
     call,        /// run `call` on the UI thread, such as a file dialog's handler
     access,      /// an assistive technology asks for `request`
     dismissed,   /// the system closed popup window `surface`, such as on a press outside the app
+    hidden,      /// window hidden or minimized, `Host.run` draws no frames until it shows
+    shown,       /// window shown or restored
 }
 
 /// Input or window event from a platform. A field doc starting with an event kind, such as `pointer:`, says which
@@ -139,7 +141,7 @@ interface WindowControl
     void setVisible(bool on);          /// shows, unminimizes and raises the window, or hides it
     bool visible();                    /// true unless hidden
     void setMinimumSize(int w, int h); /// smallest size the user can resize to, 0 for no limit
-    void setIcon(Image icon);          /// sets the icon the window system shows
+    void setIcon(Image[] icons);       /// sets the icon the window system shows, one image per size
 }
 
 /// Entry of a tray icon's menu.

@@ -29,7 +29,7 @@ final class HeadlessPlatform : Platform, FileDialogs, AccessAdapter, WindowContr
     string title;        /// last title set
     bool hidden;         /// true while hidden
     int[2] minSize;      /// last minimum size, width then height
-    Image icon;          /// last icon set
+    Image[] icon;        /// last icon set, one image per size
     HeadlessTray[] trays; /// tray icons opened, closed ones included
     bool trayless;       /// true to answer `openTray` with null, as without a system tray
     Rect screen;         /// what `popupArea` answers, empty for no popup windows
@@ -126,9 +126,9 @@ final class HeadlessPlatform : Platform, FileDialogs, AccessAdapter, WindowContr
     }
 
     /// Records the icon.
-    void setIcon(Image img)
+    void setIcon(Image[] icons)
     {
-        icon = img;
+        icon = icons;
     }
 
     /// Records a tray icon, null when `trayless`.

@@ -7,7 +7,7 @@ Known gaps, by area.
 - One top-level window per process, no second window with its own UI tree.
   The SDL3 platform owns SDL, reads the events of every window (its popup
   windows included) and quits SDL when it closes.
-- Popup windows: only run on X11. Without a compositor the shadow room
+- Popup windows: only tried on X11. Without a compositor the shadow room
   around them shows black. Each opens its own GL context, about 10 ms with
   llvmpipe. Dialogs and other centered popups stay inside the window.
   Screenshots hold the main window only.
@@ -17,8 +17,8 @@ Known gaps, by area.
   popup would have been still reaches the popup.
 - File dialogs on Linux need an XDG portal or zenity, else they answer as
   cancelled.
-- A hidden window still draws the frames asked for, such as animations.
-- Window icons take one image, no extra sizes.
+- Wayland does not report minimizing, so a minimized window still draws the
+  frames asked for, such as animations.
 - Tray icons: no click on the icon itself, only menu entries. No icons in
   entries, and entries cannot be added or removed once shown, close and
   open the tray again. Linux needs an AppIndicator library and a desktop
@@ -30,7 +30,8 @@ Known gaps, by area.
 ## Rendering
 
 - No Vulkan renderer. Everything above the renderer sees only `FrameMesh`.
-- Clean layers are copied into one frame mesh, uploaded whole every frame.
+- A changed layer uploads its whole mesh, and batches never merge across
+  layers, one VAO bind per visible layer.
 - Glyph quads cost about 350 ns each, most of a changed island's cost.
 - Software renderer: one thread, whole frame every time, skips raw views.
 
@@ -71,7 +72,6 @@ Known gaps, by area.
 - Text fields have no character bounds, screen readers cannot move the caret.
 - Dock panes are not named by their tabs.
 - Table cells are not exposed as cells.
-- Context menus do not open from a screen reader.
 - No live regions.
 - Island text boxes take no `setValue`.
 - Only the Linux adapter has been run (AT-SPI). Windows and macOS follow
@@ -116,6 +116,5 @@ Known gaps, by area.
 ## Dock
 
 - Floating windows stay inside the main window.
-- Pressing floating content does not raise it, only its tab bar or border.
 - No keyboard way to move panes.
 - Losing window focus mid-drag drops the tab.

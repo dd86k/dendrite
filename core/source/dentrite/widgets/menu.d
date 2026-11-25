@@ -1168,6 +1168,7 @@ final class ContextMenu : Node
     this(Menu menu, Node content)
     {
         this.menu = menu;
+        hasContextMenu = true;
         add(content);
     }
 
@@ -1335,6 +1336,7 @@ struct IslandContextMenu
         Ui u = ui;
         Menu m = menu;
         Flex n = new Flex(Axis.vertical, 0, CrossAlign.stretch, null);
+        n.hasContextMenu = true;
         ui.put(n);
         ui.track(n, id);
         ui.contextArea(id, (Point p, bool keyboard) {
@@ -1872,6 +1874,74 @@ unittest
     h.setFocus(plain);
     h.injectKey('c', Mod.ctrl);
     assert(copied == 2, "focus outside the content");
+}
+
+// Screen readers: nodes inside a context menu, in an island area too, offer to open it, and asking opens it
+// below the node with the first item highlighted. Nodes outside and disabled ones do not offer it.
+unittest
+{
+    import dentrite.access : AccessDemand, AccessNode;
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.containers : column;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.island : island;
+    import dentrite.platform : Event, EventKind, WindowOptions;
+    import dentrite.widgets.button : Button, button;
+
+    WindowOptions o;
+    o.accessibility = true;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    HeadlessPlatform p = new HeadlessPlatform(400, 300);
+    p.listening = AccessDemand.full;
+    Host h = new Host(p, new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+
+    /// Exposed node with `role` and `label` as last sent.
+    const(AccessNode)* sent(Role role, string label)
+    {
+        const(AccessNode)* n = h.access.find(role, label);
+        assert(n !is null, label);
+        return n;
+    }
+
+    /// Asks for the context menu of the button named `label`.
+    void ask(string label)
+    {
+        Event e = {kind: EventKind.access, request: AccessRequest(sent(Role.button, label).id,
+            AccessAction.showContextMenu)};
+        h.handle(e);
+        h.frame();
+    }
+
+    MenuItem copy = menuItem("&Copy", () {});
+    Button inner = button("Inner");
+    Button off = button("Off");
+    off.enabled = false;
+    ContextMenu cm = contextMenu(copy)(column()(inner, off));
+    h.setRoot(column()(cm, button("Outside")));
+    h.frame();
+    assert(sent(Role.button, "Inner").info.allows(AccessAction.showContextMenu));
+    assert(sent(Role.button, "Off").info.allows(AccessAction.showContextMenu) == false, "disabled");
+    assert(sent(Role.button, "Outside").info.allows(AccessAction.showContextMenu) == false, "outside");
+    ask("Inner");
+    assert(cm.menu.isOpen && cm.menu.list.hotItem is copy);
+    assert(cm.menu.popup.bounds.x == inner.bounds.x && cm.menu.popup.bounds.y > inner.bounds.y);
+    cm.menu.close();
+
+    Menu edit = popupMenu(menuItem("Cu&t", () {}));
+    h.setRoot(island((Ui ui) {
+        ui.button("Plain");
+        ui.contextMenu(edit)({ ui.button("In"); });
+    }));
+    h.frame();
+    h.frame();
+    assert(sent(Role.button, "Plain").info.allows(AccessAction.showContextMenu) == false);
+    assert(sent(Role.button, "In").info.allows(AccessAction.showContextMenu));
+    ask("In");
+    assert(edit.isOpen && edit.list.hot == 0, "island area");
 }
 
 // Rows of a virtual list take focus on press, so Delete reaches their context menu. Removing the focused row
