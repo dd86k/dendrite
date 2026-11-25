@@ -88,6 +88,7 @@ Ninja when found):
 ```sh
 rdmd tools/winlibs.d --sdl3                # 3.4.20, or --sdl3=VERSION, or --sdl3=path/to/SDL
 dub build --override-config=dentrite:sdl3/static
+dub test -c unittest-static                # test every subpackage against it
 ```
 
 The tool warns when SDL lists a system library the `static` configuration in

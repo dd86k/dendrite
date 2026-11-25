@@ -16,6 +16,21 @@ configuration "unittest" {
     lflags "/LIBPATH:$PACKAGE_DIR/winlibs" platform="windows"
 }
 
+// `dub test -c unittest-static`, with SDL3 linked in like `dentrite:sdl3/static`.
+configuration "unittest-static" {
+    platforms "linux" "windows"
+    targetType "library"
+    targetPath "bin"
+    sourcePaths "core/source" "gl33/source" "sdl3/source"
+    importPaths "core/source" "gl33/source" "sdl3/source"
+    libs "freetype" "harfbuzz"
+    lflags "/LIBPATH:$PACKAGE_DIR/winlibs" platform="windows"
+    lflags "$PACKAGE_DIR/winlibs/libSDL3.a" platform="linux"
+    libs "m" "pthread" platform="linux"
+    libs "SDL3-static" "kernel32" "user32" "gdi32" "winmm" "imm32" "ole32" "oleaut32" "version" "uuid" \
+        "advapi32" "setupapi" "shell32" "dinput8" platform="windows"
+}
+
 subPackage {
     name "core"
     description "Core Dentrite library"
