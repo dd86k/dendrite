@@ -67,10 +67,12 @@ immutable string[] libpngSources = [
 ];
 
 /// FreeType options for PNG glyphs and the zlib above, and libpng without the SIMD sources in its CPU directories.
+/// NOTE: zlib symbols get a z_ prefix, as DMD's Phobos carries its own zlib in a single object file that would
+/// clash. Z_PREFIX skips z_errmsg, renamed by hand.
 immutable string[] freetypeDefines = [
-    "FT2_BUILD_LIBRARY", "FT_CONFIG_OPTION_USE_PNG", "FT_CONFIG_OPTION_SYSTEM_ZLIB", "PNG_ARM_NEON_OPT=0",
-    "PNG_INTEL_SSE_OPT=0", "PNG_MIPS_MSA_OPT=0", "PNG_MIPS_MMI_OPT=0", "PNG_POWERPC_VSX_OPT=0",
-    "PNG_LOONGARCH_LSX_OPT=0", "PNG_RISCV_RVV_OPT=0",
+    "FT2_BUILD_LIBRARY", "FT_CONFIG_OPTION_USE_PNG", "FT_CONFIG_OPTION_SYSTEM_ZLIB", "Z_PREFIX",
+    "z_errmsg=z_z_errmsg", "PNG_ARM_NEON_OPT=0", "PNG_INTEL_SSE_OPT=0", "PNG_MIPS_MSA_OPT=0", "PNG_MIPS_MMI_OPT=0",
+    "PNG_POWERPC_VSX_OPT=0", "PNG_LOONGARCH_LSX_OPT=0", "PNG_RISCV_RVV_OPT=0",
 ];
 
 /// FreeType functions HarfBuzz looks for at configure time, all present since FreeType 2.11.
