@@ -80,13 +80,26 @@ dependency "dentrite:core" path="path/to/dentriteui"   # custom platform or head
 Bindings are hand-written `extern(C)` in `*/source/dentrite/c/`, no ImportC (finicky
 on Windows).
 
+### Static SDL
+
+On Linux and Windows, SDL3 can be linked in from `winlibs/` (needs CMake, uses
+Ninja when found):
+
+```sh
+rdmd tools/winlibs.d --sdl3                # 3.4.20, or --sdl3=VERSION, or --sdl3=path/to/SDL
+dub build --override-config=dentrite:sdl3/static
+```
+
+The tool warns when SDL lists a system library the `static` configuration in
+`dub.sdl` lacks.
+
 ### Windows
 
 - dub links `SDL3.lib`, `freetype.lib`, `harfbuzz.lib`, also from `winlibs/`.
 - `rdmd tools/winlibs.d --freetype --harfbuzz` builds static FreeType and
   HarfBuzz into `winlibs/` (needs Visual Studio C++ tools).
 - Put `SDL3.lib` in `winlibs/`, and `SDL3.dll` (plus optional
-  `SDL3_image.dll`) next to the program.
+  `SDL3_image.dll`) next to the program. Or link SDL3 in, see Static SDL.
 
 ## Modules
 

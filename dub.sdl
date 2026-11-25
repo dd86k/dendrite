@@ -44,8 +44,21 @@ subPackage {
     targetPath "bin"
     sourcePaths "sdl3/source"
     importPaths "sdl3/source"
-    libs "SDL3"
     lflags "/LIBPATH:$PACKAGE_DIR/winlibs" platform="windows"
     dependency "dentrite:core" version="*"
     dependency "dentrite:gl33" version="*"
+
+    configuration "dynamic" {
+        libs "SDL3"
+    }
+
+    // SDL3 linked in from winlibs/, built by `rdmd tools/winlibs.d --sdl3`, which also checks the system
+    // libraries below against SDL's own list. Pick it with `dub build --override-config=dentrite:sdl3/static`.
+    configuration "static" {
+        platforms "linux" "windows"
+        lflags "$PACKAGE_DIR/winlibs/libSDL3.a" platform="linux"
+        libs "m" "pthread" platform="linux"
+        libs "SDL3-static" "kernel32" "user32" "gdi32" "winmm" "imm32" "ole32" "oleaut32" "version" "uuid" \
+            "advapi32" "setupapi" "shell32" "dinput8" platform="windows"
+    }
 }

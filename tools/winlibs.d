@@ -1,11 +1,13 @@
 #!/usr/bin/env rdmd
-/// Builds static FreeType and HarfBuzz libraries from source into `winlibs/`, where dub looks for them on
-/// Windows. Run `rdmd tools/winlibs.d --freetype --harfbuzz` from any shell, or `ldc2 -run tools/winlibs.d` with
-/// the same options. `--help` lists them.
+/// Builds static FreeType, HarfBuzz and SDL3 libraries from source into `winlibs/`, where dub looks for them on
+/// Windows, and for SDL3 also on Linux with the `dentrite:sdl3/static` configuration. Run
+/// `rdmd tools/winlibs.d --freetype --harfbuzz --sdl3` from any shell, or `ldc2 -run tools/winlibs.d` with the same
+/// options. `--help` lists them.
 ///
 /// On Windows it compiles with cl, taken from PATH or else from the newest Visual Studio found by vswhere. The
 /// static C runtime (/MT) matches LDC's default, `--md` switches to /MD for `-link-defaultlib-shared`. Elsewhere
-/// it uses cc, c++ and ar, which is only useful for checking the build.
+/// it uses cc, c++ and ar, which for FreeType and HarfBuzz is only useful for checking the build. SDL3 builds
+/// with CMake, and Ninja when found.
 /// NOTE: FreeType gets the modules dentrite needs: TrueType and CFF outlines, the autohinter, the smooth
 /// rasterizer and bundled zlib for WOFF. Type 1, bitmap font formats, SDF and SVG are left out.
 module winlibs;
@@ -13,7 +15,7 @@ module winlibs;
 import std.algorithm.searching : all, any, canFind, endsWith, startsWith;
 import std.ascii : isDigit;
 import std.array : join, replace, split;
-import std.file : exists, isDir, mkdirRecurse, read, readText, remove, rename, write;
+import std.file : copy, exists, isDir, mkdirRecurse, read, readText, remove, rename, rmdirRecurse, write;
 import std.format : format;
 import std.getopt : defaultGetoptPrinter, getopt, GetoptResult;
 import std.path : absolutePath, buildNormalizedPath, buildPath, dirName, dirSeparator, pathSplitter;
@@ -28,6 +30,8 @@ import std.zip : ArchiveMember, ZipArchive;
 enum freetypeDefault = "2.13.3";
 /// HarfBuzz version downloaded by a bare `--harfbuzz`.
 enum harfbuzzDefault = "15.2.0";
+/// SDL3 version downloaded by a bare `--sdl3`.
+enum sdl3Default = "3.4.20";
 /// User agent for downloads.
 enum userAgent = "dentrite-winlibs";
 
@@ -59,6 +63,7 @@ struct Tools
     string cc;           /// C compiler
     string cxx;          /// C++ compiler
     string ar;           /// archiver
+    string path;         /// PATH the tools see
     string[string] env;  /// whole environment for the tools, null to inherit
 }
 
@@ -78,7 +83,8 @@ void step(string msg)
 
 /// Source tree of library `label` for `what`: version `what` downloaded and unpacked into `srcDir` once, or else
 /// directory `what`. `url` takes the version with dots replaced by `sep`. `marker` is a file every tree has.
-string sources(string label, string what, string srcDir, string url, string sep, string marker)
+/// `keep` lists the directories unpacked, all of them when null.
+string sources(string label, string what, string srcDir, string url, string sep, string marker, string[] keep)
 {
     string tree;
     if (what.all!(c => isDigit(c) || c == '.') == false)
@@ -105,7 +111,7 @@ string sources(string label, string what, string srcDir, string url, string sep,
             run(Tools.init, ["curl", "-fL", "--retry", "2", "-A", userAgent, "-o", zip ~ ".part", link]);
             rename(zip ~ ".part", zip);
         }
-        tree = unzip(zip, srcDir, ["include/", "src/"]);
+        tree = unzip(zip, srcDir, keep);
     }
     if (exists(buildPath(tree, marker)) == false)
     {
@@ -114,8 +120,8 @@ string sources(string label, string what, string srcDir, string url, string sep,
     return tree;
 }
 
-/// Unpacks the parts of `zip` under the `keep` directories of its top directory into `dir`, unless done before.
-/// Returns the unpacked top directory.
+/// Unpacks the parts of `zip` under the `keep` directories of its top directory, or all of it when `keep` is
+/// null, into `dir`, unless done before. Returns the unpacked top directory.
 string unzip(string zip, string dir, string[] keep)
 {
     ZipArchive archive = new ZipArchive(read(zip));
@@ -142,7 +148,8 @@ string unzip(string zip, string dir, string[] keep)
     foreach (string name, ArchiveMember m; archive.directory)
     {
         string inner = name.startsWith(top) ? name[top.length .. $] : null;
-        if (name.endsWith("/") || keep.any!(k => inner.startsWith(k)) == false)
+        if (name.endsWith("/") || inner.length == 0
+            || (keep !is null && keep.any!(k => inner.startsWith(k)) == false))
         {
             continue;
         }
@@ -267,6 +274,112 @@ void build(Tools tools, string label, string name, string[] files, string[] incl
     run(tools, tools.msvc ? [tools.ar, "/nologo", "/OUT:" ~ lib] ~ objs : [tools.ar, "rcs", lib] ~ objs);
 }
 
+/// Builds SDL3 from `src` as a static library with CMake, copies it into `outDir` and checks the libraries it
+/// links against those `dubFile` names.
+void buildSdl(Tools tools, string src, string outDir, string dubFile)
+{
+    stage("SDL: configure");
+    string cmake = toolPath(tools, "cmake");
+    if (cmake.length == 0)
+    {
+        throw new Exception(tools.msvc ? "no cmake, install Visual Studio's C++ CMake tools" : "no cmake on PATH");
+    }
+    string ninja = toolPath(tools, "ninja");
+    string dir = buildPath(outDir, "obj", "sdl3");
+    string prefix = buildPath(dir, "install");
+    // CMake's cache would keep settings from an earlier run
+    if (exists(dir))
+    {
+        rmdirRecurse(dir);
+    }
+    string[] cmd = [cmake, "-S", src, "-B", dir];
+    if (ninja.length > 0)
+    {
+        cmd ~= ["-G", "Ninja", "-DCMAKE_MAKE_PROGRAM=" ~ ninja];
+    }
+    // The lib directory is pinned so a distribution's lib64 can't move the archive
+    cmd ~= ["-DCMAKE_BUILD_TYPE=Release", "-DCMAKE_INSTALL_PREFIX=" ~ prefix, "-DCMAKE_INSTALL_LIBDIR=lib",
+        "-DSDL_SHARED=OFF", "-DSDL_STATIC=ON", "-DSDL_TESTS=OFF", "-DSDL_TEST_LIBRARY=OFF", "-DSDL_EXAMPLES=OFF"];
+    if (tools.msvc)
+    {
+        // NOTE: cl can't write its precompiled header on a VM shared folder
+        cmd ~= ["-DCMAKE_C_COMPILER=" ~ tools.cc, "-DCMAKE_CXX_COMPILER=" ~ tools.cxx,
+            "-DCMAKE_MSVC_RUNTIME_LIBRARY=" ~ (tools.sharedCrt ? "MultiThreadedDLL" : "MultiThreaded"),
+            "-DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON"];
+    }
+    else
+    {
+        cmd ~= "-DCMAKE_POSITION_INDEPENDENT_CODE=ON";
+    }
+    run(tools, cmd);
+    stage("SDL: compile");
+    run(tools, [cmake, "--build", dir, "--config", "Release"]);
+    run(tools, [cmake, "--install", dir, "--config", "Release"], true);
+    string name = tools.msvc ? "SDL3-static.lib" : "libSDL3.a";
+    string lib = buildPath(outDir, name);
+    stage("SDL: copy " ~ lib);
+    copy(buildPath(prefix, "lib", name), lib);
+    checkDubLibs(readText(buildPath(prefix, "lib", "pkgconfig", "sdl3.pc")), dubFile);
+}
+
+/// Warns about libraries `pc`, the text of sdl3.pc, links that `dubFile` doesn't name, so a new SDL dependency
+/// shows up here and not as a link error.
+void checkDubLibs(string pc, string dubFile)
+{
+    stage("SDL: libraries against " ~ dubFile);
+    version (Windows)
+    {
+        immutable string[] implicit;
+    }
+    else
+    {
+        immutable string[] implicit = ["c", "m", "dl", "pthread", "rt"]; // druntime links these
+    }
+    string dub = readText(dubFile);
+    string[] seen;
+    string[] missing;
+    foreach (string line; pc.lineSplitter)
+    {
+        if (line.startsWith("Libs:", "Libs.private:") == 0)
+        {
+            continue;
+        }
+        foreach (string token; line.split)
+        {
+            string lib = token.startsWith("-l") ? token[2 .. $]
+                : token.toLower.endsWith(".lib") ? token[0 .. $ - 4] : null;
+            if (lib.length == 0 || lib.startsWith("SDL3") || implicit.canFind(lib) || seen.canFind(lib))
+            {
+                continue;
+            }
+            seen ~= lib;
+            if (dub.canFind(`"` ~ lib ~ `"`) == false)
+            {
+                missing ~= lib;
+            }
+        }
+    }
+    if (missing.length > 0)
+    {
+        writefln("warning: the static configuration in %s lacks %-(%s %)", dubFile, missing);
+    }
+    else
+    {
+        step(seen.length == 0 ? "sdl3.pc lists nothing beyond what druntime links"
+            : "names all the libraries sdl3.pc lists");
+    }
+}
+
+/// Full path of program `name` on the PATH `tools` run with, or null.
+string toolPath(Tools tools, string name)
+{
+    version (Windows)
+    {
+        name ~= ".exe";
+    }
+    return which(name, tools.path);
+}
+
 /// Compiler setup: cl from PATH or from Visual Studio's vcvars64.bat on Windows, gcc tools elsewhere.
 /// `scratch` holds the batch file that reads the Visual Studio environment.
 Tools findTools(bool sharedCrt, string scratch)
@@ -281,6 +394,7 @@ Tools findTools(bool sharedCrt, string scratch)
         t.ar = which("lib.exe", environment.get("PATH", ""));
         if (t.cc.length > 0 && t.ar.length > 0)
         {
+            t.path = environment.get("PATH", "");
             t.cxx = t.cc;
             step("on PATH: " ~ t.cc);
             return t;
@@ -316,6 +430,7 @@ Tools findTools(bool sharedCrt, string scratch)
                 }
             }
         }
+        t.path = path;
         // Windows finds a bare program name on this process's PATH, not the one given to the child
         t.cc = which("cl.exe", path);
         t.ar = which("lib.exe", path);
@@ -331,7 +446,8 @@ Tools findTools(bool sharedCrt, string scratch)
         t.cc = "cc";
         t.cxx = "c++";
         t.ar = "ar";
-        step("cc, c++ and ar, for checking only");
+        t.path = environment.get("PATH", "");
+        step("cc, c++ and ar");
     }
     return t;
 }
@@ -393,14 +509,26 @@ int main(string[] args)
 {
     string freetype;
     string harfbuzz;
-    string outDir = buildPath(dirName(dirName(absolutePath(__FILE_FULL_PATH__))), "winlibs");
+    string sdl3;
+    string root = dirName(dirName(absolutePath(__FILE_FULL_PATH__)));
+    string outDir = buildPath(root, "winlibs");
     bool md;
     // getopt would take the next argument as the value of a bare flag
     foreach (ref string a; args[1 .. $])
     {
-        if (a == "--freetype" || a == "--harfbuzz")
+        switch (a)
         {
-            a ~= "=" ~ (a == "--freetype" ? freetypeDefault : harfbuzzDefault);
+        case "--freetype":
+            a ~= "=" ~ freetypeDefault;
+            break;
+        case "--harfbuzz":
+            a ~= "=" ~ harfbuzzDefault;
+            break;
+        case "--sdl3":
+            a ~= "=" ~ sdl3Default;
+            break;
+        default:
+            break;
         }
     }
     GetoptResult opts;
@@ -411,6 +539,8 @@ int main(string[] args)
                 ~ "directory.", &freetype,
             "harfbuzz", "Build HarfBuzz: a version to download (" ~ harfbuzzDefault ~ " when bare) or a source "
                 ~ "directory. Takes FreeType's headers from the FreeType sources.", &harfbuzz,
+            "sdl3", "Build SDL3 with CMake: a version to download (" ~ sdl3Default ~ " when bare) or a source "
+                ~ "directory.", &sdl3,
             "out", "Output directory, winlibs/ at the repository root by default.", &outDir,
             "md", "Link the C runtime as a DLL (/MD), for LDC's -link-defaultlib-shared.", &md);
     }
@@ -419,10 +549,11 @@ int main(string[] args)
         stderr.writeln(e.msg);
         return 1;
     }
-    if (opts.helpWanted || args.length > 1 || (freetype.length == 0 && harfbuzz.length == 0))
+    if (opts.helpWanted || args.length > 1 || (freetype.length == 0 && harfbuzz.length == 0 && sdl3.length == 0))
     {
-        defaultGetoptPrinter("Builds static FreeType and HarfBuzz for dentrite.\n"
-            ~ "Usage: rdmd tools/winlibs.d [--freetype[=VERSION|DIR]] [--harfbuzz[=VERSION|DIR]]", opts.options);
+        defaultGetoptPrinter("Builds static FreeType, HarfBuzz and SDL3 for dentrite.\n"
+            ~ "Usage: rdmd tools/winlibs.d [--freetype[=VERSION|DIR]] [--harfbuzz[=VERSION|DIR]] "
+            ~ "[--sdl3[=VERSION|DIR]]", opts.options);
         return opts.helpWanted ? 0 : 1;
     }
     try
@@ -430,17 +561,28 @@ int main(string[] args)
         Tools tools = findTools(md, outDir);
         string srcDir = buildPath(outDir, "src");
         mkdirRecurse(srcDir);
-        string ftSource = sources("FreeType", freetype.length > 0 ? freetype : freetypeDefault, srcDir,
-            "https://github.com/freetype/freetype/archive/refs/tags/VER-%s.zip", "-", "src/base/ftinit.c");
-        if (freetype.length > 0)
+        if (freetype.length > 0 || harfbuzz.length > 0)
         {
-            buildFreetype(tools, ftSource, outDir);
+            string ftSource = sources("FreeType", freetype.length > 0 ? freetype : freetypeDefault, srcDir,
+                "https://github.com/freetype/freetype/archive/refs/tags/VER-%s.zip", "-", "src/base/ftinit.c",
+                ["include/", "src/"]);
+            if (freetype.length > 0)
+            {
+                buildFreetype(tools, ftSource, outDir);
+            }
+            if (harfbuzz.length > 0)
+            {
+                string hbSource = sources("HarfBuzz", harfbuzz, srcDir,
+                    "https://github.com/harfbuzz/harfbuzz/archive/refs/tags/%s.zip", ".", "src/harfbuzz.cc",
+                    ["include/", "src/"]);
+                buildHarfbuzz(tools, hbSource, ftSource, outDir);
+            }
         }
-        if (harfbuzz.length > 0)
+        if (sdl3.length > 0)
         {
-            string hbSource = sources("HarfBuzz", harfbuzz, srcDir,
-                "https://github.com/harfbuzz/harfbuzz/archive/refs/tags/%s.zip", ".", "src/harfbuzz.cc");
-            buildHarfbuzz(tools, hbSource, ftSource, outDir);
+            string sdlSource = sources("SDL", sdl3, srcDir,
+                "https://github.com/libsdl-org/SDL/archive/refs/tags/release-%s.zip", ".", "include/SDL3/SDL.h", null);
+            buildSdl(tools, sdlSource, outDir, buildPath(root, "dub.sdl"));
         }
     }
     catch (Exception e)
