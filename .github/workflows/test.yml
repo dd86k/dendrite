@@ -1,4 +1,5 @@
-# Runs every test suite with DMD and LDC, and checks the guide snippets against their sources.
+# Runs every test suite with DMD and LDC on Linux and Windows, and checks the guide snippets against their
+# sources.
 name: Test
 
 on:
@@ -7,7 +8,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  test:
+  test-linux:
     runs-on: ubuntu-latest
     # NOTE: Debian for libsdl3-dev, Ubuntu 24.04 lacks it
     container: debian:trixie
@@ -39,3 +40,40 @@ jobs:
       - name: Guide snippets
         run: perl tools/sync-snippets.pl --check *.md
         working-directory: guide
+
+  test-windows:
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        compiler: [dmd-latest, ldc-latest]
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5.1.0
+      - uses: dlang-community/setup-dlang@5d239e99bc553874d9362e7e6aeeac9454b6789f # v2
+        with:
+          compiler: ${{ matrix.compiler }}
+      # NOTE: winlibs.d pins the library versions, so its hash keys the cache
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: winlibs
+        with:
+          path: |
+            winlibs/*.lib
+            winlibs/*.dll
+          key: winlibs-${{ runner.os }}-${{ hashFiles('tools/winlibs.d') }}
+      - name: FreeType, HarfBuzz and SDL3
+        if: steps.winlibs.outputs.cache-hit != 'true'
+        run: |
+          & $env:DC -run tools/winlibs.d --freetype --harfbuzz --sdl3
+      - name: Library
+        run: dub test
+      - name: Library, static SDL3
+        run: dub test -c unittest-static
+      - name: Gallery
+        run: dub test
+        working-directory: examples/gallery
+      - name: Debugger
+        run: dub test
+        working-directory: examples/debugger
+      - name: Guide examples
+        run: dub test
+        working-directory: guide/examples
