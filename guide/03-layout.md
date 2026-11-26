@@ -238,7 +238,9 @@ user can drag, with floating windows and JSON save and restore. The view's
 `addPane`, `removePane`, `select` and `setTitle` change it from code,
 `current` holds the shown pane of the focused stack, `onLayout` runs after
 the user rearranges it, and `onCloseRequest` gets close button and middle
-click presses. See the gallery's Dock page and
+click presses. `tabMenu` gives tabs a context menu, `onBarDoubleClick`
+runs on a double click on an empty tab bar, `floating = false` turns off
+floating windows, and `minPane` sets the smallest pane size. See the gallery's Dock page and
 `examples/debugger/source/app.d`.
 
 For a layout none of these give, write a node (chapter 10): its

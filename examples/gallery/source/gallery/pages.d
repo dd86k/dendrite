@@ -115,7 +115,8 @@ Page[] pages(Gallery g)
         Page("Grids and stacks", "Cells in rows of equal columns, and children on top of each other.",
             () => gridsPage()),
         Page("Adaptive", "Layouts that change with the window size or the space they get.", () => adaptivePage(g)),
-        Page("Dock", "Tab stacks and splits. Drag tabs to dock or float them.", () => dockPage()),
+        Page("Dock", "Tab stacks and splits. Drag tabs to dock or float them, double click a tab bar for a new tab.",
+            () => dockPage()),
         Page("Islands", "Immediate-mode code on the same layout and renderer.", () => islandsPage()),
     ];
 }
@@ -888,6 +889,14 @@ Node dockPage()
     DockView view = new DockView(space, panes, titles);
     view.onCloseRequest = (string pane) { view.removePane(pane); };
     view.closable = (string pane) => pane != "editor";
+    int notes;
+    view.onBarDoubleClick = (DockNode stack) {
+        string id = format("notes%d", ++notes);
+        view.addPane(id, dockPane("Notes", "Double click a tab bar's empty part for another."), "Notes", stack);
+        view.select(id);
+    };
+    view.tabMenu = (string pane) => pane == "editor" ? null
+        : new Menu([menuItem("Close", () { view.removePane(pane); })]);
     return sized(h: 420)(view);
 }
 

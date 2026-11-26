@@ -12,6 +12,7 @@ import dentrite.node;
 import dentrite.signals : Signal;
 import dentrite.text : FontKind, TextSystem;
 import dentrite.widgets.icons : Icon, paintIcon;
+import dentrite.widgets.menu : Menu;
 import std.algorithm.comparison : max, min;
 import std.algorithm.mutation : remove;
 import std.algorithm.searching : countUntil;
@@ -903,6 +904,13 @@ final class DockView : Node, WindowKeys, AccessPartTree
     /// buttons.
     void delegate(string pane) onCloseRequest;
     bool delegate(string pane) closable; /// whether a pane can be closed, null for all
+    /// Menu for a right press on the tab of `pane`, or null for none. The press does not choose the tab.
+    Menu delegate(string pane) tabMenu;
+    void delegate(DockNode stack) onBarDoubleClick; /// runs on a double click on the empty part of a tab bar
+    bool floating = true; /// a tab dropped away from the drop buttons floats, false cancels the drag instead
+    /// Smallest content size of a stack, under its tab bar. Splitter drags, floating window resizes and side drop
+    /// buttons keep to it. A window too small for every pane still squeezes them.
+    Size minPane = Size(40, 40);
 
     private DockHit hot;         /// under the pointer
     private Drag mode;           /// what the press drags
@@ -1327,6 +1335,23 @@ final class DockView : Node, WindowKeys, AccessPartTree
         return Rect(t.right - s.tabPadX - c, t.y + round((t.h - c) / 2), c, c);
     }
 
+    /// Smallest size of `n` by `minPane`: splits add up their children along their direction.
+    private Size minOf(DockNode n)
+    {
+        if (n.kind == Kind.tabs)
+        {
+            return Size(minPane.w, minPane.h + tabBarHeight);
+        }
+        Size m;
+        foreach (size_t i, DockNode c; n.children)
+        {
+            Size k = minOf(c);
+            float gap = i > 0 ? splitterSize : 0;
+            m = n.vertical ? Size(max(m.w, k.w), m.h + k.h + gap) : Size(m.w + k.w + gap, max(m.h, k.h));
+        }
+        return m;
+    }
+
     /// Floating window rooted at `root`, or null.
     private Floating* windowFor(DockNode root)
     {
@@ -1484,7 +1509,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
         final switch (drop.kind)
         {
         case Drop.Kind.none:
-            area = mode == Drag.tab ? floatRect(pointer) : Rect.init;
+            area = mode == Drag.tab && floating ? floatRect(pointer) : Rect.init;
             break;
         case Drop.Kind.zone:
             area = DockSpace.preview(drop.stack, drop.zone);
@@ -1535,7 +1560,8 @@ final class DockView : Node, WindowKeys, AccessPartTree
         ctx.list.rect(DockSpace.part(inner, z, 0.5), c);
     }
 
-    /// Drop buttons over `stack`: the center unless `stack` holds the dragged pane, and its four sides.
+    /// Drop buttons over `stack`: the center unless `stack` holds the dragged pane, and the sides where half of it
+    /// still fits the smallest pane.
     private Guide[] stackGuides(DockNode stack, const ref DockStyle s)
     {
         Rect c = contentOf(stack);
@@ -1548,10 +1574,17 @@ final class DockView : Node, WindowKeys, AccessPartTree
         {
             gs ~= Guide(Zone.center, Rect(x, y, g, g));
         }
-        gs ~= Guide(Zone.left, Rect(x - step, y, g, g));
-        gs ~= Guide(Zone.right, Rect(x + step, y, g, g));
-        gs ~= Guide(Zone.top, Rect(x, y - step, g, g));
-        gs ~= Guide(Zone.bottom, Rect(x, y + step, g, g));
+        Size m = minOf(stack);
+        if ((stack.rect.w - splitterSize) / 2 >= m.w)
+        {
+            gs ~= Guide(Zone.left, Rect(x - step, y, g, g));
+            gs ~= Guide(Zone.right, Rect(x + step, y, g, g));
+        }
+        if ((stack.rect.h - splitterSize) / 2 >= m.h)
+        {
+            gs ~= Guide(Zone.top, Rect(x, y - step, g, g));
+            gs ~= Guide(Zone.bottom, Rect(x, y + step, g, g));
+        }
         return gs;
     }
 
@@ -1775,7 +1808,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
         return this;
     }
 
-    /// Tab selection, hover, close presses, and the drags.
+    /// Tab selection, hover, close presses, bar double clicks, and the drags.
     override bool onPointer(ref const PointerEvent e)
     {
         Point local = e.pos - bounds.pos;
@@ -1805,6 +1838,10 @@ final class DockView : Node, WindowKeys, AccessPartTree
                 closing = h;
                 closingButton = e.button;
                 closingPane = h.node.panes[h.index];
+            }
+            else if (e.button == 1 && e.clicks == 2 && h.kind == DockHit.Kind.bar && onBarDoubleClick !is null)
+            {
+                onBarDoubleClick(h.node);
             }
             else if (e.button == 1)
             {
@@ -1850,6 +1887,28 @@ final class DockView : Node, WindowKeys, AccessPartTree
         {
             onCloseRequest(closingPane);
         }
+    }
+
+    /// Opens `tabMenu` for the tab under a right press at window point `p`. Not from the keyboard, tabs take no
+    /// focus.
+    override bool onContextMenu(Point p, bool keyboard)
+    {
+        if (keyboard || tabMenu is null)
+        {
+            return false;
+        }
+        DockHit h = hitAt(p - bounds.pos);
+        if (h.kind != DockHit.Kind.tab && h.kind != DockHit.Kind.close)
+        {
+            return false;
+        }
+        Menu m = tabMenu(h.node.panes[h.index]);
+        if (m is null)
+        {
+            return false;
+        }
+        m.openAt(tree, p);
+        return true;
     }
 
     /// Makes the stack under a press at window point `p` the focused one and raises the floating window there.
@@ -1977,32 +2036,36 @@ final class DockView : Node, WindowKeys, AccessPartTree
         setHot(DockHit.init);
     }
 
-    /// Moves the grabbed sides of the floating window to follow the pointer, keeping the smallest size.
+    /// Moves the grabbed sides of the floating window to follow the pointer, keeping the smallest size and its
+    /// panes' smallest sizes.
     private void resizeTo(Point p)
     {
         Rect r = grabRect;
         float dx = p.x - grabAt.x;
         float dy = p.y - grabAt.y;
         size_t e = grab.index;
+        Size m = minOf(grabWindow);
+        float minW = max(minWindowW, m.w);
+        float minH = max(minWindowH, m.h);
         if ((e & Edge.left) != 0)
         {
-            float d = min(dx, r.w - minWindowW);
+            float d = min(dx, r.w - minW);
             r.x += d;
             r.w -= d;
         }
         if ((e & Edge.right) != 0)
         {
-            r.w = max(r.w + dx, minWindowW);
+            r.w = max(r.w + dx, minW);
         }
         if ((e & Edge.top) != 0)
         {
-            float d = min(dy, r.h - minWindowH);
+            float d = min(dy, r.h - minH);
             r.y += d;
             r.h -= d;
         }
         if ((e & Edge.bottom) != 0)
         {
-            r.h = max(r.h + dy, minWindowH);
+            r.h = max(r.h + dy, minH);
         }
         if (Floating* f = windowFor(grabWindow))
         {
@@ -2011,8 +2074,8 @@ final class DockView : Node, WindowKeys, AccessPartTree
         markNeedsLayout();
     }
 
-    /// Ends the drag: docks or floats the dragged pane, which becomes focused, or keeps a moved or resized window
-    /// inside the view. Runs `onLayout` if anything changed.
+    /// Ends the drag: docks the dragged pane, or floats it while `floating` is on, and focuses it. Or keeps a moved
+    /// or resized window inside the view. Runs `onLayout` if anything changed.
     private void finish()
     {
         Rect view = Rect(0, 0, size.w, size.h);
@@ -2026,6 +2089,10 @@ final class DockView : Node, WindowKeys, AccessPartTree
             changed = grab.node.shares != dragShares;
             break;
         case Drag.tab:
+            if (drop.kind == Drop.Kind.none && floating == false)
+            {
+                break;
+            }
             if (drop.kind == Drop.Kind.none)
             {
                 space.undock(moving, DockSpace.keepIn(floatRect(pointer), view));
@@ -2131,7 +2198,8 @@ final class DockView : Node, WindowKeys, AccessPartTree
         }
     }
 
-    /// Moves the dragged splitter so the pointer stays on it, keeping both neighbors at least 40 px.
+    /// Moves the dragged splitter so the pointer stays on it, keeping both neighbors at their smallest size. Stays
+    /// put when the two are already smaller.
     private void dragTo(Point local)
     {
         import std.algorithm.comparison : clamp;
@@ -2147,7 +2215,15 @@ final class DockView : Node, WindowKeys, AccessPartTree
         float pair = dragShares[i] + dragShares[i + 1];
         float pairPx = extent * pair / total;
         float delta = n.vertical ? local.y - grabAt.y : local.x - grabAt.x;
-        float firstPx = clamp(extent * dragShares[i] / total + delta, 40f, pairPx - 40f);
+        Size a = minOf(n.children[i]);
+        Size b = minOf(n.children[i + 1]);
+        float lo = n.vertical ? a.h : a.w;
+        float hi = pairPx - (n.vertical ? b.h : b.w);
+        if (hi < lo)
+        {
+            return;
+        }
+        float firstPx = clamp(extent * dragShares[i] / total + delta, lo, hi);
         n.shares[i] = pair * firstPx / pairPx;
         n.shares[i + 1] = pair - n.shares[i];
         markNeedsLayout();
@@ -2413,7 +2489,7 @@ unittest
     assert(f.v.space.floating[1].rect == Rect(380, 150, 120, 150) && f.v.mode == Drag.none);
 }
 
-// Drop buttons that overhang a narrow stack stay reachable over its neighbor.
+// Drop buttons that overhang a narrow stack stay reachable over its neighbor, with a small enough `minPane`.
 unittest
 {
     DockFixture f = DockFixture.make();
@@ -2421,6 +2497,7 @@ unittest
     {
         f.dispose();
     }
+    f.v.minPane = Size(10, 10);
     f.send(PointerKind.down, Point(502, 300));
     f.send(PointerKind.move, Point(952, 300));
     f.end();
@@ -2616,4 +2693,112 @@ unittest
     f.send(PointerKind.down, x("breakpoints", 0));
     f.end();
     assert(bw.panes == ["watch"] && f.nodes["watch"].tree !is null);
+}
+
+// With `floating` off a tab dropped away from the buttons goes back, and a bar double click runs its callback.
+unittest
+{
+    DockFixture f = DockFixture.make();
+    scope (exit)
+    {
+        f.dispose();
+    }
+    int layouts;
+    f.v.onLayout = () { ++layouts; };
+    f.v.floating = false;
+    f.begin(f.tab("watch", 1));
+    f.to(Point(200, 400));
+    assert(f.v.drop.kind == Drop.Kind.none);
+    f.end();
+    assert(f.v.space.floating.length == 0 && f.v.space.find("watch").panes == ["breakpoints", "watch"]);
+    assert(layouts == 0);
+
+    DockNode clicked;
+    f.v.onBarDoubleClick = (DockNode s) { clicked = s; };
+    DockNode memory = f.v.space.find("memory");
+    Point bar = Point(memory.rect.right - 20, memory.rect.y + 12);
+    PointerEvent e = PointerEvent(PointerKind.down, bar, 1, 2);
+    f.v.onPointer(e);
+    f.send(PointerKind.up, bar);
+    assert(clicked is memory && f.v.mode == Drag.none);
+    e.pos = f.tab("memory", 0);
+    clicked = null;
+    f.v.onPointer(e);
+    f.send(PointerKind.up, e.pos);
+    assert(clicked is null, "not on a tab");
+}
+
+// Splitters, floating window borders and side drop buttons keep to `minPane`.
+unittest
+{
+    DockFixture f = DockFixture.make();
+    scope (exit)
+    {
+        f.dispose();
+    }
+    f.v.minPane = Size(180, 120);
+    f.send(PointerKind.down, Point(502, 300));
+    f.send(PointerKind.move, Point(1000, 300));
+    f.end();
+    assert(f.nodes["source"].bounds.w == 1004 - splitterSize - 180, "the column keeps 180");
+    f.send(PointerKind.down, Point(900, 302));
+    f.send(PointerKind.move, Point(900, 600));
+    f.end();
+    assert(f.nodes["memory"].bounds.h == 120);
+
+    f.begin(f.tab("source", 0));
+    f.to(f.guide("memory", Zone.center));
+    DockStyle s = f.t.style!DockStyle();
+    Guide[] gs = f.v.stackGuides(f.v.space.find("memory"), s);
+    assert(gs.length == 1 && gs[0].zone == Zone.center, "halves would be too small");
+    f.escape();
+    f.end();
+
+    f.v.space.undock("watch", Rect(100, 100, 400, 300));
+    f.v.sync();
+    f.t.flush();
+    f.send(PointerKind.down, Point(499, 399));
+    f.send(PointerKind.move, Point(150, 150));
+    f.end();
+    assert(f.v.space.floating[0].rect == Rect(100, 100, 180, 120 + tabBarHeight));
+}
+
+// A right press on a tab opens `tabMenu` for its pane without choosing it.
+unittest
+{
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.host : Host;
+    import dentrite.platform : WindowOptions;
+    import dentrite.widgets.menu : menuItem;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    Host h = new Host(new HeadlessPlatform(1004, 604), new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    Node[string] ps;
+    foreach (string id; ["source", "breakpoints", "watch", "memory"])
+    {
+        ps[id] = new Fixed(Size.init);
+    }
+    DockView v = new DockView(sample(), ps, null);
+    string asked;
+    Menu m = new Menu([menuItem("Close", () {})]);
+    v.tabMenu = (string pane) { asked = pane; return pane == "memory" ? null : m; };
+    h.setRoot(v);
+    h.frame();
+    DockStyle s = h.tree.style!DockStyle();
+    Rect r = v.tabRects(v.space.find("watch"), s)[1];
+    Point p = Point(r.x + r.w / 2, r.y + r.h / 2);
+    h.inject(PointerKind.down, p, 1, 3);
+    h.inject(PointerKind.up, p, 1, 3);
+    h.frame();
+    assert(asked == "watch" && m.isOpen && v.space.find("watch").active == 0);
+    m.close();
+    h.inject(PointerKind.down, Point(600, 400), 1, 3);
+    h.inject(PointerKind.up, Point(600, 400), 1, 3);
+    assert(asked == "watch" && m.isOpen == false, "not over a tab");
 }
