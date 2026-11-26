@@ -1183,15 +1183,17 @@ final class ListItem : Node
     void delegate() onClick; /// click handler, usually selects
     bool selected;           /// drawn as selected
     bool enabled = true;     /// accepts clicks
+    string variant;          /// ListStyle variant for padding and backgrounds
     private RowChooser holder; /// parent list the held press selected through, or null
     private ubyte chooseMods; /// modifiers of that press
 
     mixin PressBehavior press;
 
-    /// Wraps `child`.
-    this(Node child, void delegate() onClick)
+    /// Wraps `child`, styled as ListStyle `variant`.
+    this(Node child, void delegate() onClick, string variant = null)
     {
         this.onClick = onClick;
+        this.variant = variant;
         add(child);
         interactive = true;
         focusable = true;
@@ -1481,7 +1483,7 @@ final class ListItem : Node
     /// Child inside the style's padding.
     protected override Size performLayout(Constraints c)
     {
-        ListStyle s = tree.style!ListStyle();
+        ListStyle s = tree.style!ListStyle(variant);
         Insets i = Insets.xy(s.padX, s.padY);
         Size cs = children[0].layout(c.deflate(i));
         children[0].offset = Point(i.left, i.top);
@@ -1491,14 +1493,14 @@ final class ListItem : Node
     /// Background for the state, the child, then the focus ring.
     override void paint(ref PaintContext ctx, Point origin)
     {
-        ListStyle s = ctx.style!ListStyle();
+        ListStyle s = ctx.style!ListStyle(variant);
         Rect r = Rect(origin.x, origin.y, size.w, size.h);
         if (selected)
         {
             ctx.list.rect(r, s.rowSelected);
             ctx.list.rect(Rect(r.x, r.y, 2, r.h), s.selectedBar);
         }
-        else if (hovered)
+        else if (hoverInside)
         {
             ctx.list.rect(r, s.rowHover);
         }
@@ -1515,18 +1517,20 @@ struct ListItemSpec
 {
     void delegate() onClick;    /// click handler
     bool delegate() selected;   /// true when the row is selected, may read signals, or null
+    string variant;             /// ListStyle variant
 
     /// Stores the options. Needed because `opCall` hides the struct literal.
-    this(void delegate() onClick, bool delegate() selected)
+    this(void delegate() onClick, bool delegate() selected, string variant)
     {
         this.onClick = onClick;
         this.selected = selected;
+        this.variant = variant;
     }
 
     /// The row around `child`. The selection effect belongs to the current owner.
     ListItem opCall(Node child)
     {
-        ListItem item = new ListItem(child, onClick);
+        ListItem item = new ListItem(child, onClick, variant);
         if (selected !is null)
         {
             bool delegate() sel = selected;
@@ -1536,10 +1540,50 @@ struct ListItemSpec
     }
 }
 
-/// Clickable list row options.
-ListItemSpec listItem(void delegate() onClick = null, bool delegate() selected = null)
+/// Clickable list row options, `variant` naming a `[list.variant]` theme section.
+ListItemSpec listItem(void delegate() onClick = null, bool delegate() selected = null, string variant = null)
 {
-    return ListItemSpec(onClick, selected);
+    return ListItemSpec(onClick, selected, variant);
+}
+
+// A row stays hovered while the pointer is over a button inside it, and a theme variant changes its padding.
+unittest
+{
+    import dentrite.host : Host;
+    import dentrite.theme : Theme;
+    import dentrite.widgets.button : Button, button;
+    import dentrite.widgets.menu : menuHost;
+
+    Host h = menuHost(200, 100);
+    scope (exit)
+    {
+        h.close();
+    }
+    h.tree.theme = new Theme("[list.dense]\npadY = 0\n", "t.theme");
+    Button go = button("Go");
+    ListItem item = listItem()(go);
+    ListItem dense = listItem(variant: "dense")(new Fixed(Size(10, 10)));
+    Node col = column()(item, dense);
+    h.setRoot(col);
+    h.frame();
+    assert(dense.size.h == 10 && item.size.h == go.size.h + 6, "the variant drops the padding");
+
+    /// Middle of `n`.
+    Point mid(Node n)
+    {
+        return Point(n.bounds.x + n.bounds.w / 2, n.bounds.y + n.bounds.h / 2);
+    }
+
+    h.inject(PointerKind.move, mid(go));
+    assert(go.hovered && item.hovered == false && item.hoverInside, "hovered through its button");
+    h.inject(PointerKind.move, Point(item.bounds.x + 1, item.bounds.y + 1));
+    assert(item.hovered && item.hoverInside && go.hoverInside == false);
+    h.inject(PointerKind.move, mid(go));
+    h.inject(PointerKind.move, mid(dense));
+    assert(item.hoverInside == false && go.hoverInside == false && dense.hoverInside && col.hoverInside);
+    col.removeChild(dense);
+    h.frame();
+    assert(col.hoverInside == false && dense.hoverInside == false, "leaving the tree clears the parents");
 }
 
 // Filtering keeps surviving row nodes, disposes the rest with their effects, and rebuilds on return.

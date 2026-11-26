@@ -634,6 +634,7 @@ abstract class Node
     /// which can still take drags the other way.
     DragAxes drags;
     bool hovered;        /// pointer is over it, set by the window
+    bool hoverInside;    /// pointer is over it or a node inside, set by the window, which repaints interactive ones
     bool pressed;        /// pointer pressed on it and not released yet, set by the window
     bool focused;        /// has keyboard focus, set by the window
     bool repaintBoundary; /// paints into its own layer even when not a relayout boundary. Set before attaching

@@ -363,7 +363,7 @@ private final class TreeRow(K, T) : Node
             ctx.list.rect(r, l.rowSelected);
             ctx.list.rect(Rect(r.x, r.y, 2, r.h), l.selectedBar);
         }
-        else if (hovered)
+        else if (hoverInside)
         {
             ctx.list.rect(r, l.rowHover);
         }

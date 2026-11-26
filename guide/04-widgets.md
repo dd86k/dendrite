@@ -55,7 +55,7 @@ The slider and the spin box share `s.width`, so either one moves the other.
 | `progressBar(() => fraction)` | `progress` | Progress bars |
 | `iconView(icon)`, `imageView(image, fit)` | `icons`, `image` | Images |
 | `tabs(signal)(tab(title, page)...)`, `tabBar(titles, signal)` | `tabs` | Tabs |
-| `listItem(onClick:, selected:)(content)` | `list` | Lists |
+| `listItem(onClick:, selected:, variant:)(content)` | `list` | Lists |
 
 Lists, trees and tables are in [chapter 5](05-collections.md); menus,
 dialogs and tooltips in [chapter 6](06-commands.md).

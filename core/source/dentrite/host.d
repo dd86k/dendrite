@@ -400,9 +400,10 @@ class Host : Services
     /// Drops hover, capture and focus held by `n`, which is leaving the tree.
     void forget(Node n)
     {
-        if (n is hoverNode)
+        if (n.hoverInside && hoverNode !is null)
         {
-            n.hovered = false;
+            hoverNode.hovered = false;
+            moveHoverInside(hoverNode, null);
             hoverNode = null;
         }
         if (n is captureNode)
@@ -913,6 +914,7 @@ class Host : Services
         }
         Node old = hoverNode;
         hoverNode = n;
+        moveHoverInside(old, n);
         if (old !is null)
         {
             old.hovered = false;
@@ -926,6 +928,47 @@ class Host : Services
             n.markNeedsPaint();
             PointerEvent enter = PointerEvent(PointerKind.enter, mouse);
             n.onPointer(enter);
+        }
+    }
+
+    /// Moves `hoverInside` from `old` and its ancestors to `n` and its ancestors, repainting interactive nodes
+    /// whose flag changes.
+    private void moveHoverInside(Node old, Node n)
+    {
+        /// True if `a` is `d` or holds it.
+        static bool holds(Node a, Node d)
+        {
+            for (; d !is null; d = d.parent)
+            {
+                if (d is a)
+                {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        for (Node a = old; a !is null; a = a.parent)
+        {
+            if (a.hoverInside && holds(a, n) == false)
+            {
+                a.hoverInside = false;
+                if (a.interactive)
+                {
+                    a.markNeedsPaint();
+                }
+            }
+        }
+        for (Node a = n; a !is null; a = a.parent)
+        {
+            if (a.hoverInside == false)
+            {
+                a.hoverInside = true;
+                if (a.interactive)
+                {
+                    a.markNeedsPaint();
+                }
+            }
         }
     }
 
@@ -1210,6 +1253,7 @@ class Host : Services
         {
             c.hovered = false;
             c.markNeedsPaint();
+            moveHoverInside(hoverNode, null);
             hoverNode = null;
         }
         pointerMoved();
