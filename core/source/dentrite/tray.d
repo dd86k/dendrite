@@ -10,8 +10,8 @@ import dentrite.node : Node;
 import dentrite.platform : TrayEntry, TrayIcon, Trays;
 import dentrite.widgets.menu : MenuItem, MenuSeparator, mnemonic;
 
-/// Tray icon of a host, from `tray`. Entries follow their command's label, enabled and checked states at each
-/// frame.
+/// Tray icon of a host, from `tray`. Entries follow their command's label, enabled and checked states through
+/// `Host.beforeFrame`, which also runs while the window is hidden.
 final class Tray
 {
     private Host host;          /// host syncing it each frame

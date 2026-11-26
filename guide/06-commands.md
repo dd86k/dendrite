@@ -121,10 +121,10 @@ pointer rests 500 ms, and Tab to a button shows its tooltip below it.
 
 `h.tray(icon:, tooltip:)(items...)` (`dentrite.tray`) shows an icon in the
 system tray with a menu of the same `menuItem`, `menu` and `menuSeparator`
-builders. Entries follow their command's label, enabled and checked states
-at each frame. It returns null when the system has no tray, such as on
-Linux without an AppIndicator library or a desktop showing StatusNotifier
-items.
+builders. Entries follow their command's label, enabled and checked states,
+while the window is hidden too. It returns null when the system has no
+tray, such as on Linux without an AppIndicator library or a desktop showing
+StatusNotifier items.
 
 Most trays open the menu on any click and say nothing about a click on the
 icon itself, so the menu needs an entry that brings the window back:

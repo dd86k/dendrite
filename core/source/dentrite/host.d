@@ -100,7 +100,8 @@ class Host : Services
     FrameStats stats;     /// timings of the last frame
     bool running = true;  /// set to false to make `run` return after the current frame
     /// App work at frame start, such as draining mailboxes. Tree changes made here show in the same frame and ask
-    /// for no other, `requestFrame` still does.
+    /// for no other, `requestFrame` still does. While the window is hidden `run` calls them with no frame after a
+    /// wake, a call or an alarm.
     void delegate()[] beforeFrame;
     /// Runs when the user asks to close the window, return false to keep it open. Null closes it.
     bool delegate() onCloseRequest;
@@ -133,6 +134,7 @@ class Host : Services
     private bool pointerIn;         /// pointer is over the window
     private MonoTime frameTime;     /// start of the current frame
     private bool hidden;            /// window hidden or minimized, `run` draws no frames
+    private bool woke;              /// a wake or call came since the hooks last ran
     private CursorShape cursorShown; /// cursor last set on the platform
     private bool textInputOn;       /// platform text input enabled
     private bool textHiddenOn;      /// platform text input is for a password
@@ -414,7 +416,8 @@ class Host : Services
     // Loop
 
     /// Runs frames until `running` is set to false, the window closes or the system asks to quit. Frames wait
-    /// while the window is hidden or minimized, alarms from `at` still run.
+    /// while the window is hidden or minimized, alarms from `at` still run and so do the `beforeFrame` hooks after
+    /// a wake, a call or an alarm.
     void run()
     {
         while (running)
@@ -429,8 +432,15 @@ class Host : Services
                     handle(e);
                 }
             }
-            alarms.fire(MonoTime.currTime);
-            if (hidden == false && clock.due(MonoTime.currTime))
+            bool rang = alarms.fire(MonoTime.currTime);
+            if (hidden)
+            {
+                if (rang || woke)
+                {
+                    runHooks();
+                }
+            }
+            else if (clock.due(MonoTime.currTime))
             {
                 frame();
             }
@@ -447,6 +457,16 @@ class Host : Services
         }
     }
 
+    /// Runs the `beforeFrame` hooks.
+    private void runHooks()
+    {
+        woke = false;
+        foreach (void delegate() hook; beforeFrame)
+        {
+            hook();
+        }
+    }
+
     /// One frame: due alarms, hooks, layout, islands, compose, render, present.
     void frame()
     {
@@ -454,10 +474,7 @@ class Host : Services
         clock.started(frameTime);
         tree.frameStart = true;
         alarms.fire(frameTime);
-        foreach (void delegate() hook; beforeFrame)
-        {
-            hook();
-        }
+        runHooks();
         tree.firePaintTimers(frameTime);
         if (holding && frameTime - held.time >= usecs(cast(long) (tree.style!ScrollStyle().pressDelay * 1000)))
         {
@@ -756,9 +773,11 @@ class Host : Services
             requestFrame();
             break;
         case EventKind.wake:
+            woke = true;
             requestFrame();
             break;
         case EventKind.call:
+            woke = true;
             if (e.call !is null)
             {
                 e.call();
@@ -1807,6 +1826,53 @@ unittest
     h.at(MonoTime.currTime, () { s.set("c"); });
     h.frame();
     assert(s.peek == "c" && h.clock.requested == false);
+}
+
+// A wake from another thread runs the hooks while the window is hidden, so a box drains with no frame drawn,
+// and a hook asking for a frame does not make the loop spin.
+unittest
+{
+    import core.thread : Thread;
+    import core.time : msecs;
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.mailbox : Queue;
+    import dentrite.signals : Signal, signal;
+    import dentrite.widgets.label : label;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    HeadlessPlatform p = new HeadlessPlatform(200, 100);
+    Host h = new Host(p, new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    Signal!string s = signal("");
+    h.setRoot(label(() => s.get));
+    h.frame();
+    h.visible = false;
+    Queue!string box = new Queue!string;
+    int runs;
+    h.beforeFrame ~= () {
+        ++runs;
+        foreach (string line; box.drain())
+        {
+            s.set(s.peek ~ line);
+        }
+        h.requestFrame();
+        if (runs == 1)
+        {
+            h.after(msecs(20), () { h.running = false; });
+        }
+    };
+    Thread t = new Thread(() { box.post("ab"); });
+    int drawn = p.presented;
+    t.start();
+    h.run();
+    t.join();
+    assert(s.peek == "ab" && p.presented == drawn, "drained hidden");
+    assert(runs == 2, "once for the wake and once for the alarm");
 }
 
 // A popup past the window edge draws in a window of its own, with room for its shadow, and not in the main frame.

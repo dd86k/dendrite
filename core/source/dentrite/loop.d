@@ -162,13 +162,15 @@ struct Alarms
         return d;
     }
 
-    /// Runs the alarms due by `now`, earliest first. Alarms added meanwhile wait for the next call.
-    void fire(MonoTime now)
+    /// Runs the alarms due by `now`, earliest first, true if any ran. Alarms added meanwhile wait for the next
+    /// call.
+    bool fire(MonoTime now)
     {
         if (list.length == 0)
         {
-            return;
+            return false;
         }
+        bool ran;
         Alarm[] due;
         Alarm[] left;
         foreach (Alarm a; list)
@@ -195,8 +197,10 @@ struct Alarms
             {
                 a.fn = null;
                 fn();
+                ran = true;
             }
         }
+        return ran;
     }
 }
 
@@ -217,11 +221,10 @@ unittest
         s.add(new Alarm(t0, () { ran ~= "n"; }));
     }));
     assert(s.timeout(t0) == msecs(10));
-    s.fire(t0 + msecs(5));
-    assert(ran == "");
-    s.fire(t0 + msecs(30));
+    assert(s.fire(t0 + msecs(5)) == false && ran == "");
+    assert(s.fire(t0 + msecs(30)));
     assert(ran == "el" && late.pending == false && gone.pending == false);
     assert(s.timeout(t0 + msecs(30)) == Duration.zero, "the added one waits for the next call");
     s.fire(t0 + msecs(30));
-    assert(ran == "eln" && s.timeout(t0) == Duration.max);
+    assert(ran == "eln" && s.timeout(t0) == Duration.max && s.fire(t0 + msecs(40)) == false);
 }

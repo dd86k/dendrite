@@ -1839,7 +1839,8 @@ unittest
         f.dispose();
     }
     f.begin(f.tab("source", 0));
-    assert(f.v.mode == Drag.tab && f.v.guided is null && f.v.drop.kind == Drop.Kind.none, "no buttons over its own stack");
+    assert(f.v.mode == Drag.tab && f.v.guided is null && f.v.drop.kind == Drop.Kind.none,
+        "no buttons over its own stack");
     f.to(f.guide("memory", Zone.right));
     assert(f.v.drop.kind == Drop.Kind.zone && f.v.drop.zone == Zone.right && f.v.guided is f.v.space.find("memory"));
     f.end();
