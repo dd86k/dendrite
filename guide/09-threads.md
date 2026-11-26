@@ -92,3 +92,8 @@ void fetch(Inbox box, immutable string[] files, int steps)
 Data crossing threads should be immutable or copied, such as
 `immutable(ubyte)[]` for a memory snapshot. The boxes lock around every
 access, but do not make what you post safe to share.
+
+Frames, and so `beforeFrame`, pause while the window is hidden or minimized.
+Boxes keep filling and drain once it shows again. For work due at a set time
+even then, `Host.after(d, fn)` and `Host.at(t, fn)` call `fn` on the UI
+thread, and the returned `Alarm` cancels it.

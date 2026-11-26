@@ -14,7 +14,8 @@ import dentrite.dock : DockStyle;
 import dentrite.draw;
 import dentrite.image : Image;
 import dentrite.island : IslandStyle;
-import dentrite.loop : FrameClock;
+import dentrite.loop : Alarms, FrameClock;
+public import dentrite.loop : Alarm;
 import dentrite.node;
 import dentrite.overlay : Popup, PopupStyle;
 import dentrite.platform;
@@ -113,6 +114,7 @@ class Host : Services
     private FrameMesh mesh;         /// tessellated frame
     private Compositor compositor;  /// layers to frame mesh
     private FrameClock clock;       /// frame requests and cap
+    private Alarms alarms;          /// calls from `at` and `after`
     private float scale = 1;        /// physical pixels per logical pixel
     private int pixelW;             /// framebuffer width
     private int pixelH;             /// framebuffer height
@@ -247,10 +249,26 @@ class Host : Services
         clock.request();
     }
 
-    /// Asks for a frame at `t`.
+    /// Asks for a frame at `t`. Frames pause while the window is hidden, `at` runs work then too.
     void requestFrameAt(MonoTime t)
     {
         clock.requestAt(t);
+    }
+
+    /// Calls `fn` on the UI thread at `t`, even while the window is hidden. Tree changes it makes show in the
+    /// next frame. Call from the UI thread, the returned alarm cancels it.
+    Alarm at(MonoTime t, void delegate() fn)
+    {
+        assert(fn !is null);
+        Alarm a = new Alarm(t, fn);
+        alarms.add(a);
+        return a;
+    }
+
+    /// Calls `fn` on the UI thread once `d` passed, see `at`.
+    Alarm after(Duration d, void delegate() fn)
+    {
+        return at(MonoTime.currTime + d, fn);
     }
 
     /// Moves keyboard focus to `n`, or clears it.
@@ -396,13 +414,14 @@ class Host : Services
     // Loop
 
     /// Runs frames until `running` is set to false, the window closes or the system asks to quit. Frames wait
-    /// while the window is hidden or minimized.
+    /// while the window is hidden or minimized, alarms from `at` still run.
     void run()
     {
         while (running)
         {
             Event e;
-            if (platform.wait(e, hidden ? Duration.max : clock.timeout(MonoTime.currTime)))
+            MonoTime now = MonoTime.currTime;
+            if (platform.wait(e, min(alarms.timeout(now), hidden ? Duration.max : clock.timeout(now))))
             {
                 handle(e);
                 while (platform.wait(e, Duration.zero))
@@ -410,6 +429,7 @@ class Host : Services
                     handle(e);
                 }
             }
+            alarms.fire(MonoTime.currTime);
             if (hidden == false && clock.due(MonoTime.currTime))
             {
                 frame();
@@ -427,12 +447,13 @@ class Host : Services
         }
     }
 
-    /// One frame: hooks, layout, islands, compose, render, present.
+    /// One frame: due alarms, hooks, layout, islands, compose, render, present.
     void frame()
     {
         frameTime = MonoTime.currTime;
         clock.started(frameTime);
         tree.frameStart = true;
+        alarms.fire(frameTime);
         foreach (void delegate() hook; beforeFrame)
         {
             hook();
@@ -1745,6 +1766,47 @@ unittest
     again = true;
     h.frame();
     assert(h.clock.requested);
+}
+
+// Alarms run while the window is hidden with no frame drawn, skip once cancelled, and run at the start of a
+// frame drawn by hand, its tree changes in that frame.
+unittest
+{
+    import core.time : msecs;
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.signals : Signal, signal;
+    import dentrite.widgets.label : label;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    HeadlessPlatform p = new HeadlessPlatform(200, 100);
+    Host h = new Host(p, new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    Signal!string s = signal("a");
+    h.setRoot(label(() => s.get));
+    h.frame();
+    h.visible = false;
+    int ran;
+    Alarm off = h.after(msecs(1), () { ran += 10; });
+    off.cancel();
+    h.after(msecs(2), () {
+        ++ran;
+        s.set("b");
+        h.running = false;
+    });
+    int drawn = p.presented;
+    h.run();
+    assert(ran == 1 && p.presented == drawn && h.clock.requested, "ran hidden, the change waits for a frame");
+
+    h.visible = true;
+    h.frame();
+    h.at(MonoTime.currTime, () { s.set("c"); });
+    h.frame();
+    assert(s.peek == "c" && h.clock.requested == false);
 }
 
 // A popup past the window edge draws in a window of its own, with room for its shadow, and not in the main frame.
