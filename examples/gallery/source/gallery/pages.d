@@ -44,6 +44,7 @@ import std.algorithm.comparison : clamp, max, min;
 import std.array : array, join;
 import std.format : format;
 import std.meta : AliasSeq;
+import std.path : baseName;
 import std.random : Random, choice, uniform;
 import std.range : iota;
 import std.math : abs, sin, sqrt;
@@ -115,8 +116,8 @@ Page[] pages(Gallery g)
         Page("Grids and stacks", "Cells in rows of equal columns, and children on top of each other.",
             () => gridsPage()),
         Page("Adaptive", "Layouts that change with the window size or the space they get.", () => adaptivePage(g)),
-        Page("Dock", "Tab stacks and splits. Drag tabs to dock or float them, double click a tab bar for a new tab.",
-            () => dockPage()),
+        Page("Dock", "Tab stacks and splits. Drag tabs to dock or float them, double click a tab bar for a new tab, "
+            ~ "drop files on a stack to open them there.", () => dockPage(g)),
         Page("Islands", "Immediate-mode code on the same layout and renderer.", () => islandsPage()),
     ];
 }
@@ -873,8 +874,8 @@ private Node drawerSplit()
     return splitView(open, minW: 500, sideW: 180, mode: Collapse.drawer, collapsed: folded)(side, content);
 }
 
-/// Dock view with four panes.
-Node dockPage()
+/// Dock view with four panes, opening files dropped on it through `g`'s window.
+Node dockPage(Gallery g)
 {
     DockSpace space = new DockSpace(DockNode.split(false, DockNode.stack("files", "search"),
         DockNode.split(true, DockNode.stack("editor"), DockNode.stack("output"))));
@@ -899,6 +900,26 @@ Node dockPage()
         string id = format("notes%d", ++notes);
         view.addPane(id, dockPane("Notes", "Double click a tab bar's empty part for another."), "Notes", stack);
         view.select(id);
+        moved.set(moved.peek + 1);
+    };
+    g.host.onFileHover = (Point p) {
+        if (view.tree !is null)
+        {
+            view.fileHover(p);
+        }
+    };
+    g.host.onFileLeave = () { view.fileLeave(); };
+    g.host.onFileDrop = (string[] paths, Point p) {
+        DockNode stack = view.tree is null ? null : view.stackAt(p);
+        if (stack is null)
+        {
+            return;
+        }
+        foreach (string path; paths)
+        {
+            view.addPane(path, dockPane(baseName(path), path), baseName(path), stack);
+            view.select(path);
+        }
         moved.set(moved.peek + 1);
     };
     view.setTabInfo((string pane) {

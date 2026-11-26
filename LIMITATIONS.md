@@ -24,8 +24,8 @@ Known gaps, by area.
   open the tray again. Linux needs an AppIndicator library and a desktop
   showing StatusNotifier items. Outside Windows the loop wakes every 50 ms
   while a tray shows, as SDL runs it only while pumping events.
-- File drops: the files and the drop point, once the drop ends. No dropped
-  text and nothing while a drag hovers, so no drop target highlight.
+- File drops: no dropped text. A drag over the window shows whether it holds
+  files only at the drop. Hovering has been tried on X11 and Wayland only.
 - `Host.colorScheme` comes from SDL, `unknown` where it cannot tell, such as
   on Linux without an XDG portal.
 - Tray submenus on SDL before 3.2.16 rely on a workaround that reads SDL's

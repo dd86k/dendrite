@@ -93,6 +93,7 @@ enum SDL_EventType : uint
     dropText = 0x1001,
     dropBegin = 0x1002,
     dropComplete = 0x1003,
+    dropPosition = 0x1004,
     user = 0x8000,
 }
 

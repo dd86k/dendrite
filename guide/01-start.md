@@ -66,9 +66,10 @@ What each part does:
   it or ask about unsaved changes. It draws a frame only when something
   asked for one: input, a changed signal that a node shows, a timer, or a
   wake from another thread.
-- `w.onFileDrop` gets the files dropped on the window, and `w.colorScheme`
-  says whether the system is light or dark, rerunning effects that read it
-  when that changes.
+- `w.onFileDrop` gets the files dropped on the window, and `w.onFileHover`
+  and `w.onFileLeave` follow a drag over it, such as to light a drop
+  target. `w.colorScheme` says whether the system is light or dark,
+  rerunning effects that read it when that changes.
 
 Without a theme every widget uses the dark look built into its style
 struct, variants included. Set `o.themePath` to a theme file to change it,

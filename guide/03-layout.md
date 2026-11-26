@@ -248,6 +248,9 @@ gallery's Dock page and `examples/debugger/source/app.d`. A `DockView`:
   node for the end of each tab bar from `setTrailing`,
 - keeps panes at least `minPane` big, and floats nothing with
   `floating = false`.
+- lights the stack a dragged file would go to with `fileHover` and
+  `fileLeave`, called from the window's `onFileHover` and `onFileLeave`,
+  and finds it again for `onFileDrop` with `stackAt`.
 
 For a layout none of these give, write a node (chapter 10): its
 `performLayout` gets the constraints and positions the children.

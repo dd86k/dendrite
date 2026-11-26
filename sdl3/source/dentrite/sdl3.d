@@ -768,6 +768,7 @@ final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, T
         case SDL_EventType.dropText:
         case SDL_EventType.dropBegin:
         case SDL_EventType.dropComplete:
+        case SDL_EventType.dropPosition:
             return s.drop.windowID;
         default:
             return s.type >= 0x200 && s.type < 0x300 ? s.window.windowID : 0;
@@ -917,9 +918,17 @@ final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, T
                 e = takeDrop(); // a file the system opens with the app, with no begin
             }
             break;
+        case SDL_EventType.dropPosition:
+            e.kind = EventKind.fileHover;
+            e.pos = toPixels(s.drop.x, s.drop.y);
+            break;
         case SDL_EventType.dropComplete:
             dragging = false;
             e = takeDrop();
+            if (e.kind == EventKind.none)
+            {
+                e.kind = EventKind.fileLeave; // left, or dropped what `fileDrop` does not carry, such as text
+            }
             break;
         case SDL_EventType.systemThemeChanged:
             e.kind = EventKind.colorScheme;

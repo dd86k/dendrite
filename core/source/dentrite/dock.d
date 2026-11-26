@@ -939,6 +939,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
     private Node delegate(DockNode stack) trailing; /// node for the end of a tab bar, see `setTrailing`
     private Node[DockNode] trailers; /// nodes from `trailing` by stack
     private TabStrip[DockNode] strips; /// tab bar scrolling by stack
+    private DockNode fileStack;  /// stack lit as the target of a file dragged over the window, or null
     private DockHit closing;     /// tab whose close button or middle button is pressed, `Kind.none` for none
     private ubyte closingButton; /// button pressed on `closing`
     private string closingPane;  /// pane of `closing`
@@ -1152,6 +1153,35 @@ final class DockView : Node, WindowKeys, AccessPartTree
     {
         titles[id] = title;
         markNeedsLayout();
+    }
+
+    /// Stack under window point `p`, floating windows first, or null, such as for where a dropped file goes.
+    DockNode stackAt(Point p)
+    {
+        return space.stackAt(p - bounds.pos);
+    }
+
+    /// Lights the stack under window point `p` as where a dragged file would go and returns it, or null when none is
+    /// there, such as over a splitter. Call it from `Host.onFileHover`, and `fileLeave` from `Host.onFileLeave`.
+    DockNode fileHover(Point p)
+    {
+        DockNode st = stackAt(p);
+        if (st !is fileStack)
+        {
+            fileStack = st;
+            markNeedsPaint();
+        }
+        return st;
+    }
+
+    /// Turns off the light from `fileHover`.
+    void fileLeave()
+    {
+        if (fileStack !is null)
+        {
+            fileStack = null;
+            markNeedsPaint();
+        }
     }
 
     /// Focused stack, see `current`, or null when no pane shows.
@@ -1530,7 +1560,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
         return own;
     }
 
-    /// Main tree, floating windows from the bottom up, then drop targets.
+    /// Main tree, floating windows from the bottom up, the file drop target, then drop targets.
     override void paint(ref PaintContext ctx, Point origin)
     {
         DockStyle s = ctx.style!DockStyle();
@@ -1543,6 +1573,10 @@ final class DockView : Node, WindowKeys, AccessPartTree
             ctx.list.rect(r.inset(-1), s.window);
             ctx.list.rect(r, s.splitter);
             paintTree(ctx, origin, f.root, s);
+        }
+        if (fileStack !is null && placed(fileStack))
+        {
+            ctx.list.rect(fileStack.rect.translate(origin), s.drop, 0, s.accent, 1);
         }
         paintDrop(ctx, origin, s);
     }
@@ -3101,4 +3135,22 @@ unittest
     assert(v.tabRects(src, s)[0].x == 0);
     w.pos = Point(100, 300);
     assert(v.onWheel(w) == false, "not over a tab bar");
+}
+
+// `fileHover` lights the stack under the point, floating windows first, and `fileLeave` turns it off.
+unittest
+{
+    DockFixture f = DockFixture.make();
+    scope (exit)
+    {
+        f.dispose();
+    }
+    assert(f.v.fileHover(Point(700, 450)) is f.v.space.find("memory") && f.v.fileStack is f.v.space.find("memory"));
+    assert(f.v.fileHover(Point(502, 300)) is null && f.v.fileStack is null, "splitter");
+    f.v.space.undock("watch", Rect(600, 350, 300, 200));
+    f.v.sync();
+    f.t.flush();
+    assert(f.v.fileHover(Point(700, 450)) is f.v.space.find("watch"), "floating window over memory");
+    f.v.fileLeave();
+    assert(f.v.fileStack is null);
 }

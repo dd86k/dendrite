@@ -87,7 +87,9 @@ enum EventKind
     dismissed,   /// the system closed popup window `surface`, such as on a press outside the app
     hidden,      /// window hidden or minimized, `Host.run` draws no frames until it shows
     shown,       /// window shown or restored
-    fileDrop,    /// files dropped on the window
+    fileHover,   /// a drag over the window moved, of files or of text the window ignores
+    fileLeave,   /// the drag over the window left or ended without files
+    fileDrop,    /// files dropped on the window, which also ends the drag
     colorScheme, /// the system switched between light and dark, see `Appearance`
 }
 
@@ -98,7 +100,7 @@ struct Event
     EventKind kind;      /// kind of event
     uint surface;        /// popup window the event came from, see `PopupWindow.id`, 0 for the main window
     PointerKind pointer; /// `pointer`: move, down or up
-    Point pos;           /// `pointer`, `wheel` and `fileDrop`: position in physical pixels within `surface`
+    Point pos;           /// `pointer`, `wheel`, `fileHover`, `fileDrop`: position in physical pixels within `surface`
     ubyte button;        /// `pointer`: 1 left, 2 middle, 3 right
     ubyte clicks;        /// `pointer`: 2 for a double click
     ubyte mods;          /// `Mod` flags, combined with `|`

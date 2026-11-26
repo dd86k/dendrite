@@ -114,6 +114,10 @@ class Host : Services
     bool delegate() onCloseRequest;
     /// Runs with the files dropped on the window and the drop point in logical pixels.
     void delegate(string[] paths, Point at) onFileDrop;
+    /// Runs while something is dragged over the window, with the pointer in logical pixels. Whether it holds files
+    /// shows only at the drop.
+    void delegate(Point at) onFileHover;
+    void delegate() onFileLeave; /// runs when the drag over the window leaves or ends, before `onFileDrop`
     string screenshotPath; /// PNG file written after the next frame, then cleared
     Platform platform;    /// window system side, see `Platform`
     Renderer renderer;    /// renderer drawing the frames
@@ -148,6 +152,7 @@ class Host : Services
     private bool woke;              /// a wake or call came since the hooks last ran
     private CursorShape cursorShown; /// cursor last set on the platform
     private bool textInputOn;       /// platform text input enabled
+    private bool fileOver;          /// something is dragged over the window, see `onFileHover`
     private bool textHiddenOn;      /// platform text input is for a password
     private string composing;       /// input method text not committed yet
     private Rect inputArea;         /// caret last given to the input method
@@ -887,7 +892,23 @@ class Host : Services
                 textHandler(e.text);
             }
             break;
+        case EventKind.fileHover:
+            Point hoverAt;
+            if (fromSurface(e, hoverAt))
+            {
+                fileOver = true;
+                if (onFileHover !is null)
+                {
+                    onFileHover(hoverAt);
+                    requestFrame();
+                }
+            }
+            break;
+        case EventKind.fileLeave:
+            endFileHover();
+            break;
         case EventKind.fileDrop:
+            endFileHover();
             Point dropAt;
             if (onFileDrop !is null && e.paths.length > 0 && fromSurface(e, dropAt))
             {
@@ -915,6 +936,21 @@ class Host : Services
             }
             requestFrame();
             break;
+        }
+    }
+
+    /// Ends a drag over the window, running `onFileLeave`.
+    private void endFileHover()
+    {
+        if (fileOver == false)
+        {
+            return;
+        }
+        fileOver = false;
+        if (onFileLeave !is null)
+        {
+            onFileLeave();
+            requestFrame();
         }
     }
 
@@ -2448,4 +2484,45 @@ unittest
     h.frame();
     assert(l.bounds.w > before * 1.2, "mono is wider");
     assertThrown(h.setFont(FontKind.ui, "fonts/missing.ttf"));
+}
+
+// A drag over the window reaches `onFileHover` in logical pixels, and leaving or dropping ends it once, before
+// `onFileDrop`.
+unittest
+{
+    import std.format : format;
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    Host h = new Host(new HeadlessPlatform(200, 100, 2), new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    h.setRoot(new Fixed(Size(10, 10)));
+    h.frame();
+    string[] log;
+    h.onFileHover = (Point p) { log ~= format("hover %g,%g", p.x, p.y); };
+    h.onFileLeave = () { log ~= "leave"; };
+    h.onFileDrop = (string[] paths, Point p) { log ~= "drop " ~ paths[0]; };
+
+    Event hover = Event(EventKind.fileHover);
+    hover.pos = Point(40, 60);
+    h.handle(hover);
+    hover.pos = Point(80, 60);
+    h.handle(hover);
+    Event leave = Event(EventKind.fileLeave);
+    h.handle(leave);
+    h.handle(leave);
+    assert(log == ["hover 20,30", "hover 40,30", "leave"]);
+
+    log = null;
+    h.handle(hover);
+    Event drop = Event(EventKind.fileDrop);
+    drop.paths = ["/tmp/a.bin"];
+    drop.pos = Point(80, 60);
+    h.handle(drop);
+    assert(log == ["hover 40,30", "leave", "drop /tmp/a.bin"]);
 }
