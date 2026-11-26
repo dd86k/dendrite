@@ -9,7 +9,7 @@ module dentrite.widgets.table;
 
 import core.time : MonoTime;
 import dentrite.containers : Fling, ScrollStyle, ScrollView, scroll;
-import dentrite.access : AccessParts, nodeText, textOnly;
+import dentrite.access : AccessPartTree, AccessParts, nodeText, textOnly;
 import dentrite.node;
 import dentrite.signals;
 import dentrite.text;
@@ -115,11 +115,13 @@ final class Table(K, T) : Node, DragScroller
         interactive = true;
     }
 
-    /// Table of the header and the bound rows.
+    /// Table of the header and the bound rows, counting the header as a row.
     override void describe(ref AccessInfo a)
     {
         a.role = Role.table;
         a.multiselectable = list.selectedKeys !is null;
+        a.rowCount = cast(uint) list.count + 1;
+        a.columnCount = cast(uint) shown.peek.length;
     }
 
     /// Current width of column `i`.
@@ -569,10 +571,11 @@ private final class TableHeader(K, T) : Node, AccessParts
         drags = DragAxes.horizontal;
     }
 
-    /// Header row named by the shown titles.
+    /// Header row named by the shown titles, the first row of the table.
     override void describe(ref AccessInfo a)
     {
         a.role = Role.row;
+        a.rowIndex = 1;
         foreach (size_t i; table.shown.peek)
         {
             string s = table.columns[i].title;
@@ -592,6 +595,8 @@ private final class TableHeader(K, T) : Node, AccessParts
         size_t col = table.shown.peek[i];
         a.role = Role.columnHeader;
         a.label = table.columns[col].title;
+        a.rowIndex = 1;
+        a.columnIndex = cast(uint) i + 1;
         if (table.columns[col].less !is null)
         {
             a.allow(AccessAction.click);
@@ -961,7 +966,7 @@ private final class TableHeader(K, T) : Node, AccessParts
 }
 
 /// Row of a table: one cell per column, clipped to its column. Press selects, a double click activates.
-private final class TableRow(K, T) : Node
+private final class TableRow(K, T) : Node, AccessPartTree
 {
     private Table!(K, T) table; /// owning table
     private T delegate() item;  /// row's item
@@ -987,7 +992,8 @@ private final class TableRow(K, T) : Node
         });
     }
 
-    /// Row named by its shown cells, which stay out unless one holds more than text.
+    /// Row named by its shown cells. Each one is a cell holding its content, which stays out unless a cell holds
+    /// more than text.
     override void describe(ref AccessInfo a)
     {
         a.role = Role.row;
@@ -1000,6 +1006,7 @@ private final class TableRow(K, T) : Node
         a.leaf = textOnly(this);
         a.allow(AccessAction.click);
         table.list.describeRow(this, a);
+        a.rowIndex = a.position + 1;
     }
 
     /// Click selects the row.
@@ -1012,6 +1019,60 @@ private final class TableRow(K, T) : Node
         table.list.press(table.list.indexOf(table.keyOf(item())), 0, this);
         table.list.endDrag();
         return true;
+    }
+
+    /// Shown cells.
+    size_t accessPartCount()
+    {
+        return table.shown.peek.length;
+    }
+
+    /// Cell of the `i`th shown column, named by its text when the row holds only text.
+    void describePart(size_t i, ref AccessInfo a, ref Rect r)
+    {
+        size_t col = table.shown.peek[i];
+        AccessInfo row;
+        table.list.describeRow(this, row);
+        a.role = Role.cell;
+        a.rowIndex = row.position + 1;
+        a.columnIndex = cast(uint) i + 1;
+        if (textOnly(this))
+        {
+            a.label = nodeText(children[col]);
+        }
+        a.allow(AccessAction.click);
+        r = Rect(r.x + table.columnX(col), r.y, table.widths[col], r.h);
+    }
+
+    /// Click selects the row.
+    bool accessPartAction(size_t i, ref const AccessRequest r)
+    {
+        return accessAction(r);
+    }
+
+    /// No cell takes focus.
+    ptrdiff_t accessFocusPart()
+    {
+        return -1;
+    }
+
+    /// Cells are not nested.
+    ptrdiff_t partParent(size_t i)
+    {
+        return -1;
+    }
+
+    /// Cell holding content node `c`, or -1 for a hidden column's.
+    ptrdiff_t childPart(Node c)
+    {
+        foreach (size_t i, size_t col; table.shown.peek)
+        {
+            if (children[col] is c)
+            {
+                return i;
+            }
+        }
+        return -1;
     }
 
     /// Shown cells at their column's left edge inside the padding, centered on the tallest.
@@ -1445,6 +1506,57 @@ unittest
         }
     }
     assert(rows > 0 && rows < t.list.children.length, "some bound rows are hidden");
+}
+
+// Rows expose a cell per shown column with its row and column, named by its text, or holding its content when a
+// cell holds more than text.
+unittest
+{
+    import dentrite.access : AccessNode, AccessTree, AccessUpdate, Role;
+    import dentrite.host : Host;
+    import dentrite.widgets.checkbox : checkbox;
+    import dentrite.widgets.label : label;
+    import dentrite.widgets.menu : menuHost;
+    import std.conv : to;
+
+    Host h = menuHost(400, 200);
+    scope (exit)
+    {
+        h.close();
+    }
+    Planet[] planets = [Planet("Mars", 2), Planet("Earth", 1)];
+    Table!(string, Planet) t = table(items: () => planets, key: (Planet p) => p.name, selected: signal(""))(
+        tableColumn("Name", (Planet delegate() p) => label(() => p().name), width: 120),
+        tableColumn("Moons", (Planet delegate() p) => label(() => p().moons.to!string), width: 80));
+    h.setRoot(t);
+    h.frame();
+    AccessTree tree = new AccessTree();
+    tree.update(h.tree, null, true);
+    const(AccessNode)* tab = tree.find(Role.table, null);
+    assert(tab.info.rowCount == 3 && tab.info.columnCount == 2, "the header counts as a row");
+    assert(tree.find(Role.columnHeader, "Moons").info.columnIndex == 2);
+    const(AccessNode)* earth = tree.find(Role.cell, "Earth");
+    const(AccessNode)* moon = tree.find(Role.cell, "1");
+    assert(earth.info.rowIndex == 3 && earth.info.columnIndex == 1 && earth.children.length == 0);
+    assert(moon.info.rowIndex == 3 && moon.info.columnIndex == 2);
+    assert(moon.bounds.x == earth.bounds.right, "cells sit in their columns");
+    assert(tree.find(Role.row, "Earth, 1").children == [earth.id, moon.id]);
+
+    Table!(string, Planet) c = table(items: () => planets, key: (Planet p) => p.name, selected: signal(""))(
+        tableColumn("Name", (Planet delegate() p) => label(() => p().name), width: 120),
+        tableColumn("Seen", (Planet delegate() p) => checkbox(signal(false), "Seen"), width: 80));
+    h.setRoot(c);
+    h.frame();
+    AccessUpdate u = tree.update(h.tree, null, true);
+    assert(tree.find(Role.label, "Mars") !is null && tree.find(Role.cell, "Mars") is null,
+        "content speaks for itself");
+    ulong seen = tree.find(Role.checkBox, "Seen").id;
+    bool held;
+    foreach (ref AccessNode n; u.nodes)
+    {
+        held = held || (n.info.role == Role.cell && n.info.columnIndex == 2 && n.children == [seen]);
+    }
+    assert(held, "the cell holds its content");
 }
 
 // A sideways touch drag on the rows scrolls the columns without selecting, and one on the header resizes.

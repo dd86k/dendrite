@@ -118,6 +118,7 @@ enum : int
 {
     ACCESSKIT_ACTION_DATA_VALUE = 1,         /// `value` is set
     ACCESSKIT_ACTION_DATA_NUMERIC_VALUE = 2, /// `numericValue` is set
+    ACCESSKIT_ACTION_DATA_SET_TEXT_SELECTION = 7, /// `selection` is set
 }
 
 enum : ubyte
@@ -129,6 +130,7 @@ enum : ubyte
     ACCESSKIT_ACTION_DECREMENT = 6,          /// step down
     ACCESSKIT_ACTION_INCREMENT = 7,          /// step up
     ACCESSKIT_ACTION_SCROLL_INTO_VIEW = 15,  /// bring into view
+    ACCESSKIT_ACTION_SET_TEXT_SELECTION = 18, /// move the caret or selection
     ACCESSKIT_ACTION_SET_VALUE = 20,         /// replace the value
     ACCESSKIT_ACTION_SHOW_CONTEXT_MENU = 21, /// open the context menu
 }
@@ -138,6 +140,11 @@ enum : ubyte
     ACCESSKIT_TOGGLED_FALSE = 0, /// unchecked
     ACCESSKIT_TOGGLED_TRUE = 1,  /// checked
     ACCESSKIT_TOGGLED_MIXED = 2, /// partly checked
+}
+
+enum : ubyte
+{
+    ACCESSKIT_TEXT_DIRECTION_LEFT_TO_RIGHT = 0, /// text runs left to right
 }
 
 enum : ubyte
@@ -223,11 +230,17 @@ __gshared
         accesskit_node_set_max_numeric_value, accesskit_node_set_numeric_value_step;
     /// Sets the UTF-8 length of each character of a text run.
     C!(void function(accesskit_node*, size_t length, const(ubyte)* values)) accesskit_node_set_character_lengths;
+    /// Sets the left edge, or the width, of each character of a text run, from the run's left edge.
+    C!(void function(accesskit_node*, size_t length, const(float)* values)) accesskit_node_set_character_positions,
+        accesskit_node_set_character_widths;
+    /// Sets the direction of a text run.
+    C!(void function(accesskit_node*, ubyte)) accesskit_node_set_text_direction;
     /// Sets the caret and selection of a text field.
     C!(void function(accesskit_node*, accesskit_text_selection)) accesskit_node_set_text_selection;
     /// Sets an index or count.
     C!(void function(accesskit_node*, size_t)) accesskit_node_set_level, accesskit_node_set_position_in_set,
-        accesskit_node_set_size_of_set;
+        accesskit_node_set_size_of_set, accesskit_node_set_row_count, accesskit_node_set_column_count,
+        accesskit_node_set_row_index, accesskit_node_set_column_index;
     /// New update with room for `capacity` nodes and `focus`.
     C!(accesskit_tree_update* function(size_t capacity, accesskit_node_id focus))
         accesskit_tree_update_with_capacity_and_focus;
@@ -342,7 +355,10 @@ private enum string[] commonNames = ["accesskit_node_new", "accesskit_node_set_l
     "accesskit_node_set_min_numeric_value", "accesskit_node_set_max_numeric_value",
     "accesskit_node_set_numeric_value_step", "accesskit_node_set_level", "accesskit_node_set_position_in_set",
     "accesskit_node_set_size_of_set", "accesskit_node_set_character_lengths",
-    "accesskit_node_set_text_selection", "accesskit_tree_update_with_capacity_and_focus",
+    "accesskit_node_set_character_positions", "accesskit_node_set_character_widths",
+    "accesskit_node_set_text_direction", "accesskit_node_set_row_count", "accesskit_node_set_column_count",
+    "accesskit_node_set_row_index", "accesskit_node_set_column_index", "accesskit_node_set_text_selection",
+    "accesskit_tree_update_with_capacity_and_focus",
     "accesskit_tree_update_push_node", "accesskit_tree_update_set_tree_info", "accesskit_tree_info_new",
     "accesskit_tree_info_set_toolkit_name", "accesskit_action_request_free"];
 

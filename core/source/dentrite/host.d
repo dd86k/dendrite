@@ -29,6 +29,7 @@ import dentrite.widgets.label : TextStyle;
 import dentrite.widgets.list : ListStyle;
 import dentrite.widgets.combobox : ComboBoxStyle;
 import dentrite.widgets.dialog : DialogStyle;
+import dentrite.widgets.handles : HandleStyle;
 import dentrite.widgets.menu : MenuBarStyle, MenuStyle;
 import dentrite.widgets.progress : ProgressStyle;
 import dentrite.widgets.radio : RadioStyle;
@@ -59,7 +60,7 @@ struct WindowStyle
 alias LibraryStyles = AliasSeq!(WindowStyle, TextStyle, ButtonStyle, CheckboxStyle, TextBoxStyle, ListStyle,
     PanelStyle, ScrollStyle, SeparatorStyle, DockStyle, PopupStyle, MenuStyle, MenuBarStyle, ComboBoxStyle,
     TooltipStyle, RadioStyle, SliderStyle, ProgressStyle, TabsStyle, SpinBoxStyle, TreeStyle, TableStyle,
-    DialogStyle, TextAreaStyle, IslandStyle, SplitViewStyle);
+    DialogStyle, TextAreaStyle, IslandStyle, SplitViewStyle, HandleStyle);
 
 /// Timings and sizes of the last frame.
 struct FrameStats
@@ -132,7 +133,7 @@ class Host : Services
     private PointerEvent held;      /// left press held back
     private bool mayTake;           /// a drag scroller may take the last left press until it moves `dragStart`
     private Point pressAt;          /// where the last left press went down
-    private bool longArmed;         /// `longFrom` may still open a context menu, see `ScrollStyle.longPress`
+    private bool longArmed;         /// `longFrom` may still become a long press, see `ScrollStyle.longPress`
     private PointerEvent longFrom;  /// last touch or pen press on content with a context menu
     private PointerSource source;   /// device of the last pointer event
     private MonoTime pointerTime;   /// time of the last pointer event
@@ -985,7 +986,8 @@ class Host : Services
         {
             n.onPressInside(e.pos);
         }
-        if (e.button == 1 && e.source != PointerSource.mouse && path.any!((Node n) => n.hasContextMenu))
+        bool holds = path.any!((Node n) => n.hasContextMenu || n.longPress);
+        if (e.button == 1 && e.source != PointerSource.mouse && holds)
         {
             longArmed = true;
             longFrom = e;
@@ -1099,7 +1101,8 @@ class Host : Services
         return false;
     }
 
-    /// Opens the context menu under a touch or pen press held still, cancelling the press its node had.
+    /// Runs a touch or pen press held still, cancelling the press its node had: `Node.onLongPress` on the nodes
+    /// under it that hear it, then the context menu unless one took it.
     private void openHeldMenu()
     {
         if (sliding)
@@ -1115,6 +1118,13 @@ class Host : Services
             captureNode.pressed = false;
             captureNode.markNeedsPaint();
             captureNode = null;
+        }
+        for (Node n = reachableAt(longFrom.pos); n !is null; n = n.parent)
+        {
+            if (n.longPress && n.onLongPress(longFrom.pos))
+            {
+                return;
+            }
         }
         for (Node n = reachableAt(longFrom.pos); n !is null; n = n.parent)
         {

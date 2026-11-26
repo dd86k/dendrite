@@ -100,3 +100,10 @@ its changes, for a status line. `Live.assertive` interrupts them, for
 urgent alerts. A dock view exposes each stack as a tab list followed by a
 pane named by the chosen tab, and choosing a tab from a screen reader
 switches it.
+Text fields report where each character is, and screen readers can move
+their caret and selection. Table rows expose a cell per column, with its
+row and column.
+
+On a touch screen, a long press or a double tap in a text box or text area
+selects a word and shows a handle under each end, which a drag moves. A
+context menu around the field opens along with it.

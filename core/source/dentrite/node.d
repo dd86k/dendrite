@@ -9,7 +9,7 @@
 module dentrite.node;
 
 public import dentrite.geom;
-public import dentrite.access : AccessAction, AccessInfo, AccessRequest, Live, Role, Toggle, Tri, tri;
+public import dentrite.access : AccessAction, AccessInfo, AccessLine, AccessRequest, Live, Role, Toggle, Tri, tri;
 import core.time : Duration, MonoTime;
 import dentrite.draw;
 import dentrite.overlay : Stage;
@@ -628,6 +628,7 @@ abstract class Node
     bool textInput;      /// wants text input events while focused
     bool hiddenText;     /// its text input is a password, so the platform keeps input methods off where it can
     bool hasContextMenu; /// opens a context menu for its content, so screen readers offer it on the nodes inside
+    bool longPress;      /// hears a touch or pen press held still, see `onLongPress`
     CursorShape cursor;  /// cursor shape while hovered
     /// Drag directions it uses itself, such as a canvas. A press on it is not held back for a `DragScroller`,
     /// which can still take drags the other way.
@@ -1001,6 +1002,13 @@ abstract class Node
     /// Context menu request at window point `p`, bubbling from the node under a right press or from the
     /// focused node for the menu key. `keyboard` is set for the key. True if a menu opened.
     bool onContextMenu(Point p, bool keyboard)
+    {
+        return false;
+    }
+
+    /// Called on the `longPress` nodes under a touch or pen press held still at window point `p`, innermost first,
+    /// once its press was cancelled. The context menu opens next unless one returns true.
+    bool onLongPress(Point p)
     {
         return false;
     }

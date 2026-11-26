@@ -900,7 +900,10 @@ final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, T
             else if (s.type == accessEvent)
             {
                 e.kind = EventKind.access;
-                e.request = AccessKitAdapter.request(s);
+                if (access !is null)
+                {
+                    e.request = access.request(s);
+                }
             }
             else if (s.type == trayEvent)
             {

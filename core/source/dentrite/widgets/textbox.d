@@ -8,6 +8,7 @@ import dentrite.immediate;
 import dentrite.node;
 import dentrite.signals : Signal, effect;
 import dentrite.text;
+import dentrite.widgets.handles : HandleTarget, SelectionHandles;
 import std.algorithm.comparison : clamp, max, min;
 import std.array : replicate;
 import std.ascii : isAlphaNum;
@@ -190,8 +191,9 @@ struct LineEdit
         }
         if (clicks == 2)
         {
-            anchor = wordStart(caret);
-            caret = wordEnd(caret);
+            size_t[2] w = wordAt(caret);
+            anchor = w[0];
+            caret = w[1];
         }
         else if (clicks >= 3)
         {
@@ -250,6 +252,33 @@ struct LineEdit
         return i;
     }
 
+    /// Word holding the character at `i` or just before it, else the run of other characters there, everything
+    /// for a password. For selecting a word under a press.
+    private size_t[2] wordAt(size_t i)
+    {
+        if (password)
+        {
+            return [0, text.length];
+        }
+        bool word(size_t k)
+        {
+            return isAlphaNum(text[k]) || text[k] >= 0x80;
+        }
+
+        bool inWord = (i < text.length && word(i)) || (i > 0 && word(i - 1));
+        size_t a = i;
+        size_t b = i;
+        while (a > 0 && word(a - 1) == inWord)
+        {
+            --a;
+        }
+        while (b < text.length && word(b) == inWord)
+        {
+            ++b;
+        }
+        return [a, b];
+    }
+
     /// End of the word at or after `i`, the text end for a password.
     private size_t wordEnd(size_t i)
     {
@@ -298,6 +327,21 @@ struct LineEdit
         }
         return i;
     }
+
+    /// Selects from `anchor` to `caret`, byte offsets into `shown`, as a screen reader asks. False when `caret`
+    /// is past the end.
+    bool selectShown(size_t anchor, size_t caret)
+    {
+        size_t n = toShown(text.length);
+        if (caret > n)
+        {
+            return false;
+        }
+        this.caret = fromShown(caret);
+        this.anchor = fromShown(anchor <= n ? anchor : caret);
+        dragging = false;
+        return true;
+    }
 }
 
 /// Dot drawn for each character of a password.
@@ -314,6 +358,15 @@ size_t indexAtX(ref const LineEdit e, Rect r, const ref TextBoxStyle s, TextSyst
 {
     float local = wx - (r.x + s.padX - round(e.scrollX));
     return e.fromShown(t.shape(s.font, s.size, e.shown, s.features).indexAt(local * t.ppp));
+}
+
+/// Line of `e` for screen readers in a box at window rect `r`, with the scroll of the last paint.
+AccessLine[] accessLinesOf(ref const LineEdit e, Rect r, const ref TextBoxStyle s, TextSystem t)
+{
+    string shown = e.shown;
+    float[] edges = t.shape(s.font, s.size, shown, s.features).charEdges(0, shown.length, 0, t.ppp);
+    Rect box = Rect(r.x + s.padX - round(e.scrollX), r.y + s.padY, edges[$ - 1], t.lineHeight(s.font, s.size));
+    return [AccessLine(0, shown.length, box, edges)];
 }
 
 /// Caret of `e` in a box at `r` as last painted, in window coordinates.
@@ -399,13 +452,14 @@ private void underline(ref PaintContext ctx, ShapedRun run, size_t from, size_t 
 }
 
 /// Retained single-line text box. Open for the combo box, which takes keys before the box does.
-class TextBox : Node, Composer
+class TextBox : Node, Composer, HandleTarget
 {
     Signal!string value;  /// bound text
     string placeholder;   /// placeholder text shown while empty
     LineEdit line;        /// content, caret and selection
     float trailing = 0;   /// space at the right end kept clear of text, for a combo box arrow
     bool enabled = true;  /// takes focus and input
+    private SelectionHandles handles; /// touch selection handles, made on first use
 
     /// Creates a box over `value`. The binding effect belongs to the current owner.
     this(Signal!string value, string placeholder)
@@ -415,6 +469,7 @@ class TextBox : Node, Composer
         interactive = true;
         focusable = true;
         textInput = true;
+        longPress = true;
         cursor = CursorShape.text;
         effect(() {
             string v = value.get;
@@ -471,11 +526,22 @@ class TextBox : Node, Composer
         a.caret = line.toShown(line.caret);
         a.anchor = line.toShown(line.anchor);
         a.allow(AccessAction.setValue);
+        a.allow(AccessAction.setSelection);
+        if (tree !is null)
+        {
+            TextBoxStyle s = tree.style!TextBoxStyle();
+            a.lines = accessLinesOf(line, bounds, s, tree.text);
+        }
     }
 
-    /// Replaces the text.
+    /// Replaces the text, or moves the caret and selection.
     override bool accessAction(ref const AccessRequest r)
     {
+        if (enabled && r.action == AccessAction.setSelection && line.selectShown(r.anchor, r.caret))
+        {
+            touch();
+            return true;
+        }
         if (r.action != AccessAction.setValue || enabled == false || r.text is null)
         {
             return false;
@@ -506,6 +572,87 @@ class TextBox : Node, Composer
         }
         paintTextBox(ctx, Rect(origin.x, origin.y, size.w, size.h), s, line, placeholder, trailing, focused,
             enabled, caretOn);
+        if (handles !is null && handles.shown)
+        {
+            ShapedRun run = ctx.text.shape(s.font, s.size, line.shown, s.features);
+            float x0 = bounds.x + s.padX - round(line.scrollX);
+            float left = bounds.x + s.padX;
+            float right = bounds.right - s.padX - trailing;
+            Rect at(size_t i)
+            {
+                return Rect(x0 + run.caretX(line.toShown(i)) / ctx.text.ppp, bounds.y + s.padY, 1,
+                    ctx.text.lineHeight(s.font, s.size));
+            }
+
+            Rect a = at(line.anchor);
+            Rect c = at(line.caret);
+            handles.place(a, focused && a.x >= left && a.x <= right, c, focused && c.x >= left && c.x <= right);
+        }
+    }
+
+    /// Selects the word under `p` with handles to change it. A context menu around it still opens.
+    override bool onLongPress(Point p)
+    {
+        if (enabled == false || tree is null)
+        {
+            return false;
+        }
+        if (tree.services !is null)
+        {
+            tree.services.setFocus(this);
+        }
+        TextBoxStyle s = tree.style!TextBoxStyle();
+        line.press(indexAtX(line, bounds, s, tree.text, p.x), 2, 0);
+        showHandles();
+        touch();
+        return false;
+    }
+
+    /// Moves an end of the selection to the text under `p`, from a handle.
+    void dragHandle(bool caretEnd, Point p)
+    {
+        TextBoxStyle s = tree.style!TextBoxStyle();
+        size_t i = indexAtX(line, bounds, s, tree.text, p.x);
+        if (caretEnd)
+        {
+            line.caret = i;
+        }
+        else
+        {
+            line.anchor = i;
+        }
+        touch();
+    }
+
+    /// True while touch selection handles show.
+    bool handlesShown()
+    {
+        return handles !is null && handles.shown;
+    }
+
+    /// Shows the touch selection handles.
+    private void showHandles()
+    {
+        if (handles is null)
+        {
+            handles = new SelectionHandles(this, this);
+        }
+        handles.show();
+    }
+
+    /// Hides the touch selection handles.
+    private void hideHandles()
+    {
+        if (handles !is null)
+        {
+            handles.hide();
+        }
+    }
+
+    /// Drops the handles with the box.
+    override void onDetach()
+    {
+        hideHandles();
     }
 
     /// Shows input method text in place of the selection, single line, until committed or cleared.
@@ -548,6 +695,14 @@ class TextBox : Node, Composer
                 return false;
             }
             line.press(indexAtX(line, bounds, s, tree.text, e.pos.x), e.clicks, e.mods);
+            if (e.source != PointerSource.mouse && e.clicks == 2)
+            {
+                showHandles();
+            }
+            else
+            {
+                hideHandles();
+            }
             touch();
             return true;
         case PointerKind.move:
@@ -582,6 +737,7 @@ class TextBox : Node, Composer
         {
             value.set(line.text);
         }
+        hideHandles();
         touch();
         return true;
     }
@@ -594,17 +750,22 @@ class TextBox : Node, Composer
         {
             return false;
         }
+        hideHandles();
         line.type(s);
         value.set(line.text);
         touch();
         return true;
     }
 
-    /// Restarts the blink and repaints.
+    /// Restarts the blink and repaints, and drops the handles when focus leaves.
     override void onFocus(bool gained)
     {
         line.dragging = false;
         line.composing = null;
+        if (gained == false)
+        {
+            hideHandles();
+        }
         touch();
     }
 }
@@ -671,6 +832,10 @@ final class TextBoxBox : Node
         a.disabled = enabled == false;
         a.caret = line.toShown(line.caret);
         a.anchor = line.toShown(line.anchor);
+        if (tree !is null)
+        {
+            a.lines = accessLinesOf(*line, bounds, style, tree.text);
+        }
     }
 
     /// Same size as the retained box.
@@ -1049,4 +1214,18 @@ unittest
     h.frame();
     h.frame();
     assert(name == "4bx21y35");
+}
+
+// A double click selects the word holding the character under it, even at the word's first character, and
+// between words the run of other characters.
+unittest
+{
+    LineEdit e;
+    e.setText("std.algorithm : filter");
+    e.press(16, 2, 0);
+    assert(e.anchor == 16 && e.caret == 22, "filter");
+    e.press(22, 2, 0);
+    assert(e.anchor == 16 && e.caret == 22, "just after it");
+    e.press(14, 2, 0);
+    assert(e.anchor == 13 && e.caret == 16, "the spaces and colon");
 }

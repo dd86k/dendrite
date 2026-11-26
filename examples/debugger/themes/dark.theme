@@ -127,6 +127,9 @@ placeholder = gray.500
 selection = #2f5ca8
 caret = gray.100
 
+[handle]
+fill = blue.500
+
 [list]
 rowHover = #ffffff0a
 rowSelected = #3b82f62e

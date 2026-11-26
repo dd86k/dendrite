@@ -12,6 +12,7 @@ import dentrite.containers : Fling, ScrollStyle;
 import dentrite.node;
 import dentrite.signals : Signal, effect;
 import dentrite.text;
+import dentrite.widgets.handles : HandleTarget, SelectionHandles;
 import std.algorithm.comparison : clamp, max, min;
 import std.array : join, split;
 import std.ascii : isAlphaNum;
@@ -92,6 +93,15 @@ private struct Row
     float x0 = 0; /// physical run x of the first glyph
 }
 
+/// What the lines for screen readers were made from, see `TextArea.accessLines`.
+private struct LinesKey
+{
+    Rect text;       /// text rect in window coordinates
+    float scrollX;   /// sideways scroll, rounded
+    float scrollY;   /// vertical scroll, rounded
+    size_t rows;     /// `TextArea.rowsMade` they belong to
+}
+
 /// Kinds of edits, so typing and deleting in a row undo as one step.
 private enum EditKind
 {
@@ -152,7 +162,7 @@ private string[] linesOf(string s)
 }
 
 /// Retained multi-line editor. Build it with `textArea`.
-final class TextArea : Node, Composer, DragScroller
+final class TextArea : Node, Composer, DragScroller, HandleTarget
 {
     Signal!string value;  /// bound text
     string placeholder;   /// placeholder text shown while empty
@@ -193,6 +203,10 @@ final class TextArea : Node, Composer, DragScroller
     private string composing;       /// input method text shown at the caret, not in the lines yet
     private size_t composeFrom;     /// start of the part being converted, bytes into `composing`
     private size_t composeTo;       /// end of that part, and the caret
+    private size_t rowsMade;        /// times the rows were made
+    private AccessLine[] lineCache; /// rows as lines for screen readers, see `accessLines`
+    private LinesKey linesKey;      /// what `lineCache` was made from
+    private SelectionHandles handles; /// touch selection handles, made on first use
 
     /// Creates an editor over `value`. The binding effect belongs to the current owner.
     this(Signal!string value, string placeholder, string variant)
@@ -203,6 +217,7 @@ final class TextArea : Node, Composer, DragScroller
         interactive = true;
         focusable = true;
         textInput = true;
+        longPress = true;
         cursor = CursorShape.text;
         effect(() {
             string v = value.get;
@@ -361,10 +376,65 @@ final class TextArea : Node, Composer, DragScroller
         a.placeholder = placeholder;
         a.readOnly = readOnly;
         a.disabled = enabled == false;
+        a.lines = accessLines();
+        a.allow(AccessAction.setSelection);
         if (readOnly == false)
         {
             a.allow(AccessAction.setValue);
         }
+    }
+
+    /// Rows as lines for screen readers, kept until the rows, their place or the scroll change. None while
+    /// composing, as that text is not in the value.
+    private AccessLine[] accessLines()
+    {
+        if (tree is null || rowsStale || composing.length > 0 || rows.length == 0)
+        {
+            return null;
+        }
+        TextAreaStyle s = style();
+        LinesKey k = LinesKey(textRect(bounds.pos, s), round(scrollX), round(scrollY), rowsMade);
+        if (k == linesKey && lineCache !is null)
+        {
+            return lineCache;
+        }
+        float lh = lineHeight();
+        float ppp = tree.text.ppp;
+        AccessLine[] made;
+        size_t lineStart;
+        foreach (size_t r, ref const Row row; rows)
+        {
+            if (r > 0 && rows[r - 1].line != row.line)
+            {
+                lineStart += lines[rows[r - 1].line].length + 1;
+            }
+            float[] edges = runs[row.line].charEdges(row.start, row.end, row.x0, ppp);
+            size_t to = lineStart + row.end;
+            if ((r + 1 == rows.length || rows[r + 1].line != row.line) && row.line + 1 < lines.length)
+            {
+                edges ~= edges[$ - 1];
+                ++to;
+            }
+            Rect box = Rect(k.text.x - k.scrollX, k.text.y + r * lh - k.scrollY, edges[$ - 1], lh);
+            made ~= AccessLine(lineStart + row.start, to, box, edges);
+        }
+        linesKey = k;
+        lineCache = made;
+        return made;
+    }
+
+    /// Position of byte offset `b` in the joined text, the end when past it.
+    private TextPos posOf(size_t b)
+    {
+        foreach (size_t i, string l; lines)
+        {
+            if (b <= l.length)
+            {
+                return TextPos(i, b);
+            }
+            b -= l.length + 1;
+        }
+        return TextPos(lines.length - 1, lines[$ - 1].length);
     }
 
     /// Byte offset of `p` in the joined text.
@@ -378,9 +448,14 @@ final class TextArea : Node, Composer, DragScroller
         return n + p.col;
     }
 
-    /// Replaces the text.
+    /// Replaces the text, or moves the caret and selection.
     override bool accessAction(ref const AccessRequest r)
     {
+        if (r.action == AccessAction.setSelection && enabled && r.caret != size_t.max)
+        {
+            select(posOf(r.anchor == size_t.max ? r.caret : r.anchor), posOf(r.caret));
+            return true;
+        }
         if (r.action != AccessAction.setValue || readOnly || enabled == false || r.text is null)
         {
             return false;
@@ -504,6 +579,7 @@ final class TextArea : Node, Composer, DragScroller
         }
         rowsStale = false;
         rowsWidth = wrapW;
+        ++rowsMade;
         rows.length = 0;
         rows.assumeSafeAppend();
         firstRow.length = lines.length;
@@ -796,6 +872,99 @@ final class TextArea : Node, Composer, DragScroller
         {
             ctx.list.rect(sth, sideThumbHeld || hovered ? ss.thumbHover : ss.thumb, ss.width / 2);
         }
+        if (handles !is null && handles.shown)
+        {
+            Rect view = textRect(bounds.pos, s);
+            Rect ab = boxOf(anchor);
+            Rect cb = boxOf(caret);
+            handles.place(ab, focused && seen(ab, view), cb, focused && seen(cb, view));
+        }
+    }
+
+    /// True if caret box `r` is inside `view`, give or take a pixel.
+    private static bool seen(Rect r, Rect view)
+    {
+        return r.x >= view.x - 1 && r.x <= view.right + 1 && r.y >= view.y - 1 && r.bottom <= view.bottom + 1;
+    }
+
+    /// Caret box of `p` in window coordinates, as last laid out and scrolled.
+    private Rect boxOf(TextPos p)
+    {
+        TextAreaStyle s = style();
+        Rect tr = textRect(bounds.pos, s);
+        size_t r = rowOf(p);
+        float lh = lineHeight();
+        return Rect(tr.x - round(scrollX) + round(xOf(p, r)), tr.y + r * lh - round(scrollY), 1, lh);
+    }
+
+    /// Selects the word under `p` with handles to change it. A context menu around it still opens.
+    override bool onLongPress(Point p)
+    {
+        if (enabled == false || tree is null || rows.length == 0 || composing.length > 0)
+        {
+            return false;
+        }
+        if (tree.services !is null)
+        {
+            tree.services.setFocus(this);
+        }
+        TextPos at = posUnder(p);
+        size_t[2] w = wordAt(lines[at.line], at.col);
+        select(TextPos(at.line, w[0]), TextPos(at.line, w[1]));
+        dragging = false;
+        showHandles();
+        return false;
+    }
+
+    /// Moves an end of the selection to the text under `p`, from a handle.
+    void dragHandle(bool caretEnd, Point p)
+    {
+        if (rows.length == 0)
+        {
+            return;
+        }
+        TextPos at = posUnder(p);
+        if (caretEnd)
+        {
+            caret = at;
+        }
+        else
+        {
+            anchor = at;
+        }
+        goalX = float.nan;
+        touch();
+    }
+
+    /// True while touch selection handles show.
+    bool handlesShown()
+    {
+        return handles !is null && handles.shown;
+    }
+
+    /// Shows the touch selection handles.
+    private void showHandles()
+    {
+        if (handles is null)
+        {
+            handles = new SelectionHandles(this, this);
+        }
+        handles.show();
+    }
+
+    /// Hides the touch selection handles.
+    private void hideHandles()
+    {
+        if (handles !is null)
+        {
+            handles.hide();
+        }
+    }
+
+    /// Drops the handles with the editor.
+    override void onDetach()
+    {
+        hideHandles();
     }
 
     /// Selection highlight from `a` to `b` on row `k`, at `at` with the row's left edge. A row whose line break
@@ -976,9 +1145,9 @@ final class TextArea : Node, Composer, DragScroller
             }
             if (e.clicks == 2)
             {
-                string l = lines[caret.line];
-                anchor = TextPos(caret.line, wordStart(l, caret.col));
-                caret = TextPos(caret.line, wordEnd(l, caret.col));
+                size_t[2] w = wordAt(lines[caret.line], caret.col);
+                anchor = TextPos(caret.line, w[0]);
+                caret = TextPos(caret.line, w[1]);
             }
             else if (e.clicks >= 3)
             {
@@ -989,6 +1158,14 @@ final class TextArea : Node, Composer, DragScroller
             dragging = e.clicks < 2;
             goalX = float.nan;
             reveal = true;
+            if (e.source != PointerSource.mouse && e.clicks == 2)
+            {
+                showHandles();
+            }
+            else
+            {
+                hideHandles();
+            }
             touch();
             return true;
         case PointerKind.move:
@@ -1355,6 +1532,7 @@ final class TextArea : Node, Composer, DragScroller
         default:
             return typesText(e);
         }
+        hideHandles();
         touch();
         return true;
     }
@@ -1367,6 +1545,7 @@ final class TextArea : Node, Composer, DragScroller
         {
             return false;
         }
+        hideHandles();
         string c = clean(s);
         bool plain = true;
         foreach (char ch; c)
@@ -1377,13 +1556,17 @@ final class TextArea : Node, Composer, DragScroller
         return true;
     }
 
-    /// Restarts the blink and repaints.
+    /// Restarts the blink and repaints, and drops the handles when focus leaves.
     override void onFocus(bool gained)
     {
         compose(null, 0, 0);
         dragging = false;
         thumbHeld = false;
         sideThumbHeld = false;
+        if (gained == false)
+        {
+            hideHandles();
+        }
         touch();
     }
 }
@@ -1400,6 +1583,29 @@ private size_t wordStart(string l, size_t i)
         --i;
     }
     return i;
+}
+
+/// Word holding the character at byte `i` of `l` or just before it, else the run of other characters there, for
+/// selecting a word under a press.
+private size_t[2] wordAt(string l, size_t i)
+{
+    bool word(size_t k)
+    {
+        return isAlphaNum(l[k]) || l[k] >= 0x80;
+    }
+
+    bool inWord = (i < l.length && word(i)) || (i > 0 && word(i - 1));
+    size_t a = i;
+    size_t b = i;
+    while (a > 0 && word(a - 1) == inWord)
+    {
+        --a;
+    }
+    while (b < l.length && word(b) == inWord)
+    {
+        ++b;
+    }
+    return [a, b];
 }
 
 /// End of the word at or after byte `i` of `l`.
@@ -1719,4 +1925,14 @@ unittest
     touch(PointerKind.down, 10);
     touch(PointerKind.up, 10);
     assert(h.focused is a && a.caret.line > 0, "a tap places the caret on a scrolled line");
+}
+
+// Word selection takes the word holding the character at a byte, or ending there, else the run of other
+// characters.
+unittest
+{
+    assert(wordAt("std.algorithm : filter", 16) == [16, 22]);
+    assert(wordAt("std.algorithm : filter", 13) == [4, 13]);
+    assert(wordAt("std.algorithm : filter", 14) == [13, 16]);
+    assert(wordAt("", 0) == [0, 0]);
 }

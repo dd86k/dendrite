@@ -12,7 +12,7 @@ import std.string : indexOf, split, strip;
 
 /// Steps `runScript` takes, for help texts.
 enum string scriptSteps = "click:X,Y[,Ctrl+Shift] dclick:X,Y rclick:X,Y down:X,Y move:X,Y up:X,Y drag:X0,Y0,X1,Y1 "
-    ~ "wheel:X,Y,DY hwheel:X,Y,DX tap:X,Y swipe:X0,Y0,X1,Y1 type:TEXT compose:TEXT key:SHORTCUT wait:FRAMES";
+    ~ "wheel:X,Y,DY hwheel:X,Y,DX tap:X,Y hold:X,Y swipe:X0,Y0,X1,Y1 type:TEXT compose:TEXT key:SHORTCUT wait:FRAMES";
 
 /// Handles waiting platform events and renders `n` frames 16 ms apart, so timers, animations and answers from
 /// other threads move on.
@@ -31,9 +31,9 @@ void settle(Host h, int n)
 
 /// Runs the `;` separated steps of `script` on `h` after two settling frames, rendering a frame after each
 /// step. Coordinates are logical pixels, `wheel` distances too. A click may name held modifiers, as
-/// `click:10,20,Ctrl`. `tap` and `swipe` touch, a swipe moving over 6 frames before letting go. `onStep` hears
-/// each step after its frame, with the times it began and its input was handled. Throws on an unknown or
-/// malformed step.
+/// `click:10,20,Ctrl`. `tap`, `hold` and `swipe` touch, a hold staying still for 600 ms and a swipe moving over
+/// 6 frames before letting go. `onStep` hears each step after its frame, with the times it began and its input
+/// was handled. Throws on an unknown or malformed step.
 void runScript(Host h, string script, void delegate(string step, MonoTime began, MonoTime handled) onStep = null)
 {
     settle(h, 2);
@@ -90,6 +90,16 @@ void runScript(Host h, string script, void delegate(string step, MonoTime began,
         case "tap":
             Point p = point(numbers(step, arg, 2));
             h.inject(PointerKind.down, p, 1, 1, 0, PointerSource.touch);
+            h.inject(PointerKind.up, p, 1, 1, 0, PointerSource.touch);
+            break;
+        case "hold":
+            Point p = point(numbers(step, arg, 2));
+            h.inject(PointerKind.down, p, 1, 1, 0, PointerSource.touch);
+            MonoTime until = MonoTime.currTime + 600.msecs;
+            while (MonoTime.currTime < until)
+            {
+                settle(h, 1);
+            }
             h.inject(PointerKind.up, p, 1, 1, 0, PointerSource.touch);
             break;
         case "swipe":

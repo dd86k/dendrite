@@ -172,6 +172,9 @@ placeholder = gray.500
 selection = #2f5ca8
 caret = gray.100
 
+[handle]
+fill = blue.500
+
 [textarea]
 fill = gray.950
 fillFocus = gray.950

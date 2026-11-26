@@ -147,6 +147,32 @@ final class ShapedRun
         return width;
     }
 
+    /// Left edge of each character of bytes `from .. to`, then the edge at `to`, in logical pixels from physical
+    /// `origin` at `ppp` physical pixels per logical one. Characters inside a ligature after its first are empty.
+    float[] charEdges(size_t from, size_t to, float origin, float ppp) const
+    {
+        import std.utf : stride;
+
+        float[] edges;
+        size_t g;
+        /// Edge before byte `b`, moving `g` forward to the first glyph at or after it.
+        float at(size_t b)
+        {
+            while (g < clusters.length && clusters[g] < b)
+            {
+                ++g;
+            }
+            return ((g < clusters.length ? pens[g] : width) - origin) / ppp;
+        }
+
+        for (size_t p = from; p < to; p += stride(text, p))
+        {
+            edges ~= at(p);
+        }
+        edges ~= at(to);
+        return edges;
+    }
+
     /// Byte offset of the caret position nearest to physical `x`.
     size_t indexAt(float x) const
     {

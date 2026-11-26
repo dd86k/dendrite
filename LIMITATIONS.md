@@ -71,9 +71,11 @@ Known gaps, by area.
   or in an island by `forNext: true` on a label declared right before it.
   Over AT-SPI the control gets the name but no labelled-by relation, which
   accesskit-c 0.23 does not map.
-- Text fields have no character bounds, screen readers cannot move the caret.
-- Table cells are not exposed as cells.
-- Island text boxes take no `setValue`.
+- Character bounds follow code points, not grapheme clusters, and assume left
+  to right text. A text area reports none while an input method composes.
+- Table cells carry their row and column, but accesskit-c 0.23 has no AT-SPI
+  table interface, so Orca reads them as plain cells.
+- Island text boxes take no `setValue` or `setSelection`.
 - Only the Linux adapter has been run (AT-SPI). Windows and macOS follow
   accesskit-c's SDL example.
 
@@ -81,8 +83,10 @@ Known gaps, by area.
 
 - One pointer, from the mouse events SDL makes of touches and pens. No pinch
   zoom or other multi-touch gestures.
-- No text selection by touch, a drag on a text area scrolls it. A long press
-  only opens context menus.
+- Touch selection handles are for retained text boxes and text areas, not
+  island text boxes. They follow the text one frame late, and dragging one to
+  the edge of a text area does not scroll it. There is no cut, copy or paste
+  bar, give the field a context menu for those.
 - Drag scrolling covers scroll views, tables and text areas. Tab strips and
   island scroll areas take the wheel only.
 - No overscroll bounce. A drag goes to the innermost view that can scroll

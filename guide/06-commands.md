@@ -88,6 +88,9 @@ passes on the rest.
 - `contextMenu(items...)(content)` opens on a right click or a long touch
   or pen press in `content`, or Shift+F10 and the menu key while it has
   focus. Screen readers can open it from any control inside.
+- A node with `longPress` set hears a long touch or pen press in
+  `onLongPress` first, innermost first, and returns true to keep the
+  context menu closed. Text fields use it to select a word.
 
 A menu, combo box list or tooltip that does not fit in the window opens in
 a popup window of its own, past the window edges, along with the popups

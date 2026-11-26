@@ -236,6 +236,12 @@ final class VirtualList(K, T) : Node, ViewportAware, RowChooser, AccessFocus
         return selection is null ? null : opIndex(selection.peek);
     }
 
+    /// Number of items.
+    size_t count() const
+    {
+        return items.length;
+    }
+
     /// Fills the place of the row holding `n` among all items, and whether it is selected.
     void describeRow(Node n, ref AccessInfo a)
     {

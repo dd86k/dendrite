@@ -101,6 +101,16 @@ enum AccessAction : ubyte
     collapse,        /// close children or a popup
     scrollIntoView,  /// bring into the visible part of its scroll views
     showContextMenu, /// open the context menu
+    setSelection,    /// move the caret or selection of a text field
+}
+
+/// Line of a text field as laid out, so screen readers find each character on screen.
+struct AccessLine
+{
+    size_t from;   /// first byte in the field's value
+    size_t to;     /// byte after the last, past the newline ending it
+    Rect rect;     /// line box in window coordinates
+    float[] edges; /// x of each character's left edge from `rect.x`, then of the line's right end
 }
 
 /// Accessible description of a node, filled by `Node.describe`.
@@ -128,8 +138,13 @@ struct AccessInfo
     uint level;         /// tree depth from 1, 0 for none
     uint position;      /// place in its set from 1, 0 for none
     uint setSize;       /// items in its set, 0 for none
+    uint rowIndex;      /// table rows and cells: row from 1, the header row being 1, 0 for none
+    uint columnIndex;   /// cells and column headers: column from 1, 0 for none
+    uint rowCount;      /// tables: rows with the header row, 0 for none
+    uint columnCount;   /// tables: columns, 0 for none
     size_t caret = size_t.max;  /// text fields: caret as a byte offset into `value`, `size_t.max` for none
     size_t anchor = size_t.max; /// text fields: other end of the selection, the caret when nothing is selected
+    AccessLine[] lines; /// text fields: lines covering `value` as laid out, empty when unknown
     Live live;          /// how changes are announced
     ushort actions;     /// supported actions, one bit per `AccessAction` value
 
@@ -199,6 +214,8 @@ struct AccessRequest
     AccessAction action; /// action to run
     string text;         /// `setValue`: new text, null when `number` is set
     double number;       /// `setValue`: new number, NaN when `text` is set
+    size_t anchor = size_t.max; /// `setSelection`: fixed end, a byte offset into the value
+    size_t caret = size_t.max;  /// `setSelection`: moving end, a byte offset into the value
 }
 
 /// What the next update must hold, from `AccessAdapter.demand`.
@@ -756,4 +773,62 @@ unittest
     assert(h.access.find(Role.label, "Empty").info.live == Live.assertive);
     h.click(Role.label, "Mail");
     assert(p.accessUpdates[$ - 1].focus == field.id, "a click on an island label focuses the control");
+}
+
+// Text fields report where each character is, line by line, and a screen reader moves their caret and selection.
+unittest
+{
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.containers : column, sized;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.host : Host;
+    import dentrite.platform : Event, EventKind, WindowOptions;
+    import dentrite.signals : Signal, signal;
+    import dentrite.widgets.textarea : TextArea, TextPos, textArea;
+    import dentrite.widgets.textbox : TextBox, textBox;
+
+    WindowOptions o;
+    o.accessibility = true;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    HeadlessPlatform p = new HeadlessPlatform(400, 300);
+    Host h = new Host(p, new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    p.listening = AccessDemand.full;
+
+    /// Asks node `id` to select from byte `anchor` to byte `caret`, then runs a frame.
+    void select(ulong id, size_t anchor, size_t caret)
+    {
+        Event e = {kind: EventKind.access};
+        e.request = AccessRequest(id, AccessAction.setSelection, null, double.nan, anchor, caret);
+        h.handle(e);
+        h.frame();
+    }
+
+    TextBox box = textBox(signal("héllo"), accessName: "Word");
+    TextArea area = textArea(signal("ab\ncd"), accessName: "Notes");
+    h.setRoot(column()(sized(w: 200)(box), sized(w: 200, h: 100)(area)));
+    h.frame();
+
+    const(AccessNode)* b = h.access.find(Role.textInput, "Word");
+    assert(b.info.allows(AccessAction.setSelection) && b.info.lines.length == 1);
+    const(AccessLine) l = b.info.lines[0];
+    assert(l.from == 0 && l.to == "héllo".length && l.edges.length == 6, "an edge per character, then the end");
+    assert(l.edges[0] == 0 && l.edges[1] > 0 && l.edges[5] > l.edges[4] && l.rect.w == l.edges[5]);
+    assert(l.rect.x > b.bounds.x && l.rect.y > b.bounds.y && l.rect.bottom < b.bounds.bottom, "inside the padding");
+    select(b.id, 0, 3);
+    assert(box.line.anchor == 0 && box.line.caret == 3, "selects \"hé\"");
+    assert(h.access.find(b.id).info.caret == 3);
+
+    const(AccessNode)* a = h.access.find(Role.multilineTextInput, "Notes");
+    assert(a.info.lines.length == 2);
+    const(AccessLine) first = a.info.lines[0];
+    const(AccessLine) second = a.info.lines[1];
+    assert(first.from == 0 && first.to == 3 && first.edges.length == 4, "the newline ends the first line");
+    assert(first.edges[3] == first.edges[2], "the newline takes no room");
+    assert(second.from == 3 && second.to == 5 && second.rect.y == first.rect.bottom);
+    select(a.id, 4, 4);
+    assert(area.caret == TextPos(1, 1) && area.anchor == area.caret);
 }

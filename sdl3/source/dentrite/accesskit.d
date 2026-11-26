@@ -11,6 +11,7 @@ import core.atomic : atomicLoad, atomicStore, cas;
 import core.stdc.stdlib : free, malloc;
 import core.stdc.string : strdup;
 import dentrite.access;
+import dentrite.geom : Rect;
 import dentrite.c.accesskit;
 import dentrite.c.sdl;
 import dentrite.platform : wakeUi;
@@ -25,6 +26,15 @@ private struct Pending
     AccessAction action; /// what to do
     double number;       /// `setValue` number, NaN for none
     char* text;          /// `setValue` text from strdup, or null
+    accesskit_text_selection selection; /// `setSelection` ends as text run positions
+}
+
+/// Text run of a field, to turn run positions back into byte offsets.
+private struct Spot
+{
+    ulong field; /// id of the field
+    size_t from; /// first byte in the field's value
+    string text; /// the run's text
 }
 
 /// AccessKit adapter on one SDL window.
@@ -35,6 +45,7 @@ final class AccessKitAdapter : AccessAdapter
     private uint actionEvent;     /// SDL user event type carrying a `Pending`
     private const(AccessUpdate)* pending; /// update the factory builds, set during `update`
     private float pendingScale;   /// scale for `pending`
+    private Spot[ulong] spots;    /// text runs sent, by id
 
     version (linux)
     {
@@ -178,7 +189,7 @@ final class AccessKitAdapter : AccessAdapter
     }
 
     /// Request carried by SDL user event `s` of the action event type, freeing what the handler allocated.
-    static AccessRequest request(ref SDL_Event s)
+    AccessRequest request(ref SDL_Event s)
     {
         Pending* p = cast(Pending*) s.user.data1;
         AccessRequest r = AccessRequest(p.target, p.action, null, p.number);
@@ -187,8 +198,35 @@ final class AccessKitAdapter : AccessAdapter
             r.text = fromStringz(p.text).idup;
             free(p.text);
         }
+        if (p.action == AccessAction.setSelection)
+        {
+            r.anchor = offsetOf(p.selection.anchor, r.target);
+            r.caret = offsetOf(p.selection.focus, r.target);
+        }
         free(p);
         return r;
+    }
+
+    /// Byte offset in its field's value of text run position `t`, with `field` set to the field. `size_t.max` for
+    /// a run not sent.
+    private size_t offsetOf(accesskit_text_position t, ref ulong field)
+    {
+        Spot* sp = t.node in spots;
+        if (sp is null)
+        {
+            return size_t.max;
+        }
+        field = sp.field;
+        size_t b;
+        foreach (size_t k; 0 .. t.index)
+        {
+            if (b >= sp.text.length)
+            {
+                break;
+            }
+            b += stride(sp.text, b);
+        }
+        return sp.from + b;
     }
 
     /// AccessKit tree update for `u`. Bounds stay logical, the window node scales them to pixels.
@@ -200,6 +238,7 @@ final class AccessKitAdapter : AccessAdapter
             accesskit_tree_info* info = accesskit_tree_info_new(u.root);
             accesskit_tree_info_set_toolkit_name(info, "dentrite");
             accesskit_tree_update_set_tree_info(t, info);
+            spots = null;
         }
         foreach (ref const AccessNode n; u.nodes)
         {
@@ -210,7 +249,7 @@ final class AccessKitAdapter : AccessAdapter
             }
             if (isText(n.info.role))
             {
-                addRuns(t, k, n);
+                addRuns(t, k, n, spots);
             }
             accesskit_tree_update_push_node(t, n.id, k);
         }
@@ -244,7 +283,8 @@ private accesskit_node* nodeOf(ref const AccessNode n)
     }
     static immutable ubyte[AccessAction.max + 1] actions = [ACCESSKIT_ACTION_CLICK, ACCESSKIT_ACTION_FOCUS,
         ACCESSKIT_ACTION_INCREMENT, ACCESSKIT_ACTION_DECREMENT, ACCESSKIT_ACTION_SET_VALUE, ACCESSKIT_ACTION_EXPAND,
-        ACCESSKIT_ACTION_COLLAPSE, ACCESSKIT_ACTION_SCROLL_INTO_VIEW, ACCESSKIT_ACTION_SHOW_CONTEXT_MENU];
+        ACCESSKIT_ACTION_COLLAPSE, ACCESSKIT_ACTION_SCROLL_INTO_VIEW, ACCESSKIT_ACTION_SHOW_CONTEXT_MENU,
+        ACCESSKIT_ACTION_SET_TEXT_SELECTION];
     foreach (AccessAction act; AccessAction.min .. cast(AccessAction)(AccessAction.max + 1))
     {
         if (a.allows(act))
@@ -309,6 +349,22 @@ private accesskit_node* nodeOf(ref const AccessNode n)
     {
         accesskit_node_set_size_of_set(k, a.setSize);
     }
+    if (a.rowIndex > 0)
+    {
+        accesskit_node_set_row_index(k, a.rowIndex - 1);
+    }
+    if (a.columnIndex > 0)
+    {
+        accesskit_node_set_column_index(k, a.columnIndex - 1);
+    }
+    if (a.rowCount > 0)
+    {
+        accesskit_node_set_row_count(k, a.rowCount);
+    }
+    if (a.columnCount > 0)
+    {
+        accesskit_node_set_column_count(k, a.columnCount);
+    }
     return k;
 }
 
@@ -321,43 +377,73 @@ private bool isText(Role r)
 /// Part of a field's text in one text run: a line, or 255 characters of it, with the newline that ends it.
 private struct Run
 {
-    size_t from; /// first byte in the text
-    size_t to;   /// byte after the last
-    ulong id;    /// node id
+    size_t from;   /// first byte in the text
+    size_t to;     /// byte after the last
+    ulong id;      /// node id
+    Rect rect;     /// bounds in window coordinates
+    float[] edges; /// left edge of each character from `rect.x`, then the right end, empty when unknown
 }
 
-/// Runs of `s` for the field with id `id`. An empty line still has one, for the caret.
-private Run[] runsOf(ulong id, string s)
+/// Lines of field `n`: as laid out, else one per line of its value over its bounds.
+private const(AccessLine)[] linesOf(ref const AccessNode n)
 {
-    Run[] runs;
+    if (n.info.lines.length > 0)
+    {
+        return n.info.lines;
+    }
+    string s = n.info.value;
+    AccessLine[] lines;
     size_t start;
-    size_t line;
     while (true)
     {
         ptrdiff_t nl = s.indexOf('\n', start);
         size_t end = nl < 0 ? s.length : nl + 1;
+        lines ~= AccessLine(start, end, n.bounds);
+        if (nl < 0)
+        {
+            return lines;
+        }
+        start = end;
+    }
+}
+
+/// Runs of field `n`. An empty line still has one, for the caret.
+private Run[] runsOf(ref const AccessNode n)
+{
+    string s = n.info.value;
+    Run[] runs;
+    foreach (size_t line, ref const AccessLine l; linesOf(n))
+    {
         size_t chunk;
-        size_t p = start;
+        size_t p = l.from;
+        size_t c; // characters of the line before `p`
         do
         {
             size_t q = p;
-            for (size_t chars; q < end && chars < 255; ++chars)
+            size_t c0 = c;
+            for (size_t chars; q < l.to && chars < 255; ++chars)
             {
                 q += stride(s, q);
+                ++c;
             }
             // Bit 61 keeps run ids apart from the ids of nodes and parts.
-            runs ~= Run(p, q, (mixId(chunk, mixId(line, id)) | 1UL << 61) & ~(3UL << 62));
+            Run r = Run(p, q, (mixId(chunk, mixId(line, n.id)) | 1UL << 61) & ~(3UL << 62), l.rect);
+            if (c < l.edges.length)
+            {
+                float x0 = l.edges[c0];
+                r.rect = Rect(l.rect.x + x0, l.rect.y, l.edges[c] - x0, l.rect.h);
+                foreach (float e; l.edges[c0 .. c + 1])
+                {
+                    r.edges ~= e - x0;
+                }
+            }
+            runs ~= r;
             ++chunk;
             p = q;
         }
-        while (p < end);
-        if (nl < 0)
-        {
-            return runs;
-        }
-        start = end;
-        ++line;
+        while (p < l.to);
     }
+    return runs;
 }
 
 /// Run and character of byte offset `b` in `s`, cut into `runs`.
@@ -378,15 +464,17 @@ private accesskit_text_position positionOf(const Run[] runs, string s, size_t b)
     return accesskit_text_position(0, 0);
 }
 
-/// Adds the text runs of field `n` to `t` as the children of `k`, and its caret and selection.
-private void addRuns(accesskit_tree_update* t, accesskit_node* k, ref const AccessNode n)
+/// Adds the text runs of field `n` to `t` as the children of `k`, with where each character is when known, and
+/// its caret and selection. Notes each run in `spots`.
+private void addRuns(accesskit_tree_update* t, accesskit_node* k, ref const AccessNode n, ref Spot[ulong] spots)
 {
     string s = n.info.value;
-    Run[] runs = runsOf(n.id, s);
+    Run[] runs = runsOf(n);
     ulong[] ids;
     foreach (ref Run r; runs)
     {
         ids ~= r.id;
+        spots[r.id] = Spot(n.id, r.from, s[r.from .. r.to]);
         accesskit_node* run = accesskit_node_new(ACCESSKIT_ROLE_TEXT_RUN);
         ubyte[] lengths;
         for (size_t p = r.from; p < r.to; p += stride(s, p))
@@ -399,8 +487,18 @@ private void addRuns(accesskit_tree_update* t, accesskit_node* k, ref const Acce
         accesskit_node_set_value_with_length(run, r.to > r.from ? s.ptr + r.from : blank.ptr, r.to - r.from);
         accesskit_node_set_character_lengths(run, lengths.length,
             lengths.length > 0 ? lengths.ptr : cast(const(ubyte)*) blank.ptr);
-        accesskit_node_set_bounds(run, accesskit_rect(n.bounds.x, n.bounds.y, n.bounds.x + n.bounds.w,
-            n.bounds.y + n.bounds.h));
+        if (lengths.length > 0 && r.edges.length == lengths.length + 1)
+        {
+            float[] widths = new float[lengths.length];
+            foreach (size_t i, ref float w; widths)
+            {
+                w = r.edges[i + 1] - r.edges[i];
+            }
+            accesskit_node_set_character_positions(run, lengths.length, r.edges.ptr);
+            accesskit_node_set_character_widths(run, widths.length, widths.ptr);
+        }
+        accesskit_node_set_text_direction(run, ACCESSKIT_TEXT_DIRECTION_LEFT_TO_RIGHT);
+        accesskit_node_set_bounds(run, accesskit_rect(r.rect.x, r.rect.y, r.rect.right, r.rect.bottom));
         accesskit_tree_update_push_node(t, r.id, run);
     }
     accesskit_node_set_children(k, ids.length, ids.ptr);
@@ -603,6 +701,13 @@ private void asked(accesskit_action_request* r, void* userdata)
     case ACCESSKIT_ACTION_SHOW_CONTEXT_MENU:
         act = AccessAction.showContextMenu;
         break;
+    case ACCESSKIT_ACTION_SET_TEXT_SELECTION:
+        if (r.data.has_value == false || r.data.value.tag != ACCESSKIT_ACTION_DATA_SET_TEXT_SELECTION)
+        {
+            return;
+        }
+        act = AccessAction.setSelection;
+        break;
     default:
         return;
     }
@@ -619,6 +724,10 @@ private void asked(accesskit_action_request* r, void* userdata)
     else if (r.data.has_value && r.data.value.tag == ACCESSKIT_ACTION_DATA_NUMERIC_VALUE)
     {
         p.number = r.data.value.numericValue;
+    }
+    else if (act == AccessAction.setSelection)
+    {
+        p.selection = accesskit_text_selection(r.data.value.selection[0], r.data.value.selection[1]);
     }
     SDL_Event e;
     e.type = a.actionEvent;
