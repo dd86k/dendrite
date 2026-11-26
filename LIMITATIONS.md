@@ -114,9 +114,8 @@ Known gaps, by area.
   whole text to the signal. Relayout shapes every line, fine for thousands of
   lines, not huge files.
 - Sliders: horizontal only, no tick marks.
-- Tab bars: no tab dragging, within a bar or between bars. Tabs show an icon,
-  a title and a close button, no marks such as a modified dot, a count,
-  progress or a lock.
+- Tab bars: no tab dragging, within a bar or between bars. Shortened titles
+  are cut at a code point, which can split a character built from several.
 - Spin boxes: plain decimals only, no units, separators or hex.
 - Tooltips: text only.
 - Popups: a plain column stretches to the window width, give it a width.
@@ -133,4 +132,3 @@ Known gaps, by area.
 - Floating windows stay inside the main window.
 - No keyboard way to move panes.
 - Losing window focus mid-drag drops the tab.
-- Tabs show their title only, no icons or marks.

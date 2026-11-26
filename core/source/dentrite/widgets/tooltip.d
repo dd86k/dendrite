@@ -126,6 +126,7 @@ final class Tooltips
     private TipBox box;      /// text
     private Node owner;      /// node whose text shows or is pending, or null
     private Node hovered;    /// node whose text applies under the pointer, or null
+    private string hoveredText; /// its text under the pointer at the last update
     private Node anchor;     /// focused node the tooltip goes under, or null to follow the pointer
     private bool quiet;      /// hidden by input until the pointer leaves `owner`
     private Point at;        /// pointer at the last update
@@ -168,16 +169,27 @@ final class Tooltips
     {
         at = p;
         Node o = hit;
-        while (o !is null && o.tooltip.length == 0)
+        string text;
+        for (; o !is null; o = o.parent)
         {
-            o = o.parent;
+            text = o.tooltipAt(p);
+            if (text.length > 0)
+            {
+                break;
+            }
         }
         if (o is hovered)
         {
+            if (text != hoveredText && anchor is null)
+            {
+                hoveredText = text;
+                moveOn();
+            }
             refresh();
             return;
         }
         hovered = o;
+        hoveredText = text;
         anchor = null;
         MonoTime now = MonoTime.currTime;
         TooltipStyle s = tree.style!TooltipStyle();
@@ -213,6 +225,27 @@ final class Tooltips
         }
     }
 
+    /// The pointer reached another part of the same node, such as another tab: a shown tooltip moves to the pointer
+    /// for refresh to update, a hushed one wakes for the new part.
+    private void moveOn()
+    {
+        if (popup.isOpen)
+        {
+            popup.moveTo(Rect(at.x, at.y, 0, tree.style!TooltipStyle().below));
+        }
+        else if (quiet)
+        {
+            quiet = false;
+            schedule(MonoTime.currTime + msecs(cast(long) tree.style!TooltipStyle().delay));
+        }
+    }
+
+    /// Text of `owner` where the tooltip goes, under the pointer or for the focused node.
+    private string ownerText()
+    {
+        return anchor is null ? owner.tooltipAt(at) : owner.tooltip;
+    }
+
     /// Follows text changes of the shown tooltip, and hides it when its text or node is gone.
     private void refresh()
     {
@@ -220,14 +253,14 @@ final class Tooltips
         {
             return;
         }
-        if (owner is null || owner.tree !is tree || owner.tooltip.length == 0
+        if (owner is null || owner.tree !is tree || ownerText.length == 0
             || (anchor !is null && anchor.tree !is tree))
         {
             popup.close();
         }
-        else if (box.text != owner.tooltip)
+        else if (box.text != ownerText)
         {
-            box.setText(owner.tooltip);
+            box.setText(ownerText);
         }
     }
 
@@ -248,13 +281,13 @@ final class Tooltips
             return;
         }
         due = MonoTime.init;
-        if (owner is null || quiet || owner.tree !is tree || owner.tooltip.length == 0
+        if (owner is null || quiet || owner.tree !is tree || ownerText.length == 0
             || (anchor !is null && anchor.tree !is tree))
         {
             return;
         }
         TooltipStyle s = tree.style!TooltipStyle();
-        box.setText(owner.tooltip);
+        box.setText(ownerText);
         popup.openAt(tree, anchor is null ? Rect(at.x, at.y, 0, s.below) : anchor.bounds);
     }
 

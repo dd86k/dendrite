@@ -39,7 +39,7 @@ import dentrite.widgets.textbox;
 import dentrite.widgets.tooltip : commandTip;
 import dentrite.widgets.tree;
 import std.algorithm.iteration : map;
-import std.algorithm.searching : canFind, count;
+import std.algorithm.searching : canFind, count, countUntil;
 import std.algorithm.comparison : clamp, max, min;
 import std.array : array, join;
 import std.format : format;
@@ -887,14 +887,37 @@ Node dockPage()
         "output": dockPane("Output", "Floating windows move by their tab bar and resize by their border.")];
     string[string] titles = ["files": "Files", "search": "Search", "editor": "Editor", "output": "Output"];
     DockView view = new DockView(space, panes, titles);
-    view.onCloseRequest = (string pane) { view.removePane(pane); };
+    Signal!int moved = signal(0);
+    view.onLayout = () { moved.set(moved.peek + 1); };
+    view.onCloseRequest = (string pane) {
+        view.removePane(pane);
+        moved.set(moved.peek + 1);
+    };
     view.closable = (string pane) => pane != "editor";
     int notes;
     view.onBarDoubleClick = (DockNode stack) {
         string id = format("notes%d", ++notes);
         view.addPane(id, dockPane("Notes", "Double click a tab bar's empty part for another."), "Notes", stack);
         view.select(id);
+        moved.set(moved.peek + 1);
     };
+    view.setTabInfo((string pane) {
+        switch (pane)
+        {
+        case "editor":
+            return TabInfo(null, tooltip: "~/notes/editor.txt, unsaved", modified: true);
+        case "search":
+            return TabInfo(null, tooltip: "12 results", badge: "12");
+        case "output":
+            return TabInfo(null, tooltip: "Read only, building", locked: true, progress: 0.6f);
+        default:
+            return TabInfo.init;
+        }
+    });
+    view.setTrailing((DockNode stack) => pad(x: 8)(label(() {
+        moved.get;
+        return format("%d", view.space.stacks().countUntil(stack) + 1);
+    }, "muted")));
     view.tabMenu = (string pane) => pane == "editor" ? null
         : new Menu([menuItem("Close", () { view.removePane(pane); })]);
     return sized(h: 420)(view);
@@ -1283,6 +1306,7 @@ Node tabsPage()
     Signal!size_t toolTab = signal(size_t(0));
     Signal!size_t toolBar = signal(size_t(0));
     Signal!size_t stackTab = signal(size_t(0));
+    Signal!size_t marked = signal(size_t(0));
 
     void close(size_t i)
     {
@@ -1346,6 +1370,12 @@ Node tabsPage()
                     "muted"),
             ),
         )),
+        section("Marks and tooltips", narrow(480, tabBar(() => [
+            TabInfo("app.d", tooltip: "~/src/app.d, unsaved", modified: true),
+            TabInfo("pages.d", tooltip: "~/src/pages.d, open twice", badge: "×2"),
+            TabInfo("shell.d", tooltip: "~/src/shell.d, read only", locked: true),
+            TabInfo("build.log", tooltip: "Building", progress: 0.6f),
+        ], marked))),
         section("Wider than its space", column(gap: 8, cross: CrossAlign.start)(
             narrow(300, tabBar(months, far)),
             label("The wheel scrolls the strip, an edge with more tabs past it fades, and the chosen tab "

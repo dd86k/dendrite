@@ -876,6 +876,12 @@ abstract class Node
         return tip;
     }
 
+    /// Tooltip text under window point `p`, `tooltip` unless overridden for parts with their own, such as tabs.
+    string tooltipAt(Point p)
+    {
+        return tip;
+    }
+
     /// Sets the text shown while the pointer rests on this node, or on a child without its own. Null for none.
     /// A shown tooltip follows on the next frame.
     final void setTooltip(string s)

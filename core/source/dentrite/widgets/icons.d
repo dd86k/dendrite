@@ -26,6 +26,7 @@ enum IconShape
     close,    /// cross, for closing a tab or window
     chevronLeft, /// chevron pointing left, for going back
     menu,     /// three bars, for showing a sidebar or a menu
+    lock,     /// padlock, for read-only or locked content
 }
 
 /// What a control shows in its icon box: `Icon.play`, a picture `Icon(img)`, or a one color picture drawn in
@@ -52,6 +53,7 @@ struct Icon
     enum Icon close = Icon(IconShape.close);               /// cross, for closing a tab or window
     enum Icon chevronLeft = Icon(IconShape.chevronLeft);   /// chevron pointing left, for going back
     enum Icon menu = Icon(IconShape.menu);                 /// three bars, for showing a sidebar or a menu
+    enum Icon lock = Icon(IconShape.lock);                 /// padlock, for read-only or locked content
 
     /// Built-in `shape`.
     this(IconShape shape)
@@ -148,6 +150,11 @@ void paintIcon(ref DrawList list, Icon icon, Rect box, Color c, bool faded = fal
         list.rect(Rect(x + 0.1 * s, y + 0.18 * s, 0.8 * s, 0.13 * s), c, 0.06 * s);
         list.rect(Rect(x + 0.1 * s, y + 0.435 * s, 0.8 * s, 0.13 * s), c, 0.06 * s);
         list.rect(Rect(x + 0.1 * s, y + 0.69 * s, 0.8 * s, 0.13 * s), c, 0.06 * s);
+        break;
+    case IconShape.lock:
+        list.polyline([at(0.32, 0.5), at(0.32, 0.3), at(0.4, 0.14), at(0.5, 0.1), at(0.6, 0.14), at(0.68, 0.3),
+            at(0.68, 0.5)], 0.12 * s, c);
+        list.rect(Rect(x + 0.18 * s, y + 0.44 * s, 0.64 * s, 0.48 * s), c, 0.08 * s);
         break;
     }
 }

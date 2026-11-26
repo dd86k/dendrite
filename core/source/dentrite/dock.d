@@ -9,10 +9,10 @@ module dentrite.dock;
 import dentrite.access : AccessPartTree;
 import dentrite.geom : Point, Rect;
 import dentrite.node;
-import dentrite.signals : Signal;
+import dentrite.signals : Effect, Signal, effect, runWithOwner;
 import dentrite.text : FontKind, TextSystem;
-import dentrite.widgets.icons : Icon, paintIcon;
 import dentrite.widgets.menu : Menu;
+import dentrite.widgets.tabs : TabInfo, TabLook, TabStrip, paintRow, paintSlot, rowWidth, slotRect;
 import std.algorithm.comparison : max, min;
 import std.algorithm.mutation : remove;
 import std.algorithm.searching : countUntil;
@@ -782,7 +782,14 @@ struct DockStyle
     Color guide = Color(0x2c, 0x2c, 0x31, 0xf0);       /// drop button fill
     Color guideBorder = Color(0x55, 0x55, 0x5c, 0xff); /// drop button outline
     Color closeHover = Color(0xff, 0xff, 0xff, 0x1a);  /// close button under the pointer
+    Color track = Color(0xff, 0xff, 0xff, 0x20);       /// unfilled part of a tab's progress bar
+    Color progress = Color(0x4c, 0x8d, 0xf6, 0xff);    /// filled part of a tab's progress bar
     float tabPadX = 12;    /// space between a tab title and the sides of its tab
+    float iconSize = 12;   /// tab icon and lock size
+    float iconGap = 6;     /// space between a tab icon and the title
+    float markGap = 6;     /// space before each mark after a title
+    float maxTitle = 0;    /// widest tab title before it is shortened, 0 for no limit
+    float fade = 24;       /// fade at a cut edge of a tab bar with more tabs than room
     float closeSize = 8;   /// close icon size
     float closeGap = 8;    /// space between a tab title and its close icon
     float guideSize = 32;  /// side length of a drop button
@@ -925,6 +932,13 @@ final class DockView : Node, WindowKeys, AccessPartTree
     private Point pointer;       /// last pointer position, local
     private AccessItem[] items;  /// items exposed to screen readers as of the last access update
     private DockNode focus;      /// focused stack, see `current`
+    private TabInfo delegate(string pane) tabInfo; /// tab content by pane, see `setTabInfo`
+    private TabInfo[string] infos; /// what `tabInfo` gave at its last read, by pane
+    private Signal!uint tabsRead;  /// bumped to read `tabInfo` again
+    private Effect reader;       /// reads `tabInfo` while attached
+    private Node delegate(DockNode stack) trailing; /// node for the end of a tab bar, see `setTrailing`
+    private Node[DockNode] trailers; /// nodes from `trailing` by stack
+    private TabStrip[DockNode] strips; /// tab bar scrolling by stack
     private DockHit closing;     /// tab whose close button or middle button is pressed, `Kind.none` for none
     private ubyte closingButton; /// button pressed on `closing`
     private string closingPane;  /// pane of `closing`
@@ -936,6 +950,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
         this.panes = panes;
         this.titles = titles;
         current = new Signal!string(null);
+        tabsRead = new Signal!uint(0);
         interactive = true;
         sync();
     }
@@ -968,8 +983,76 @@ final class DockView : Node, WindowKeys, AccessPartTree
         {
             walk(f.root);
         }
+        DockNode[] stacks = space.stacks();
+        Node[DockNode] keptNodes;
+        TabStrip[DockNode] keptStrips;
+        foreach (DockNode st; stacks)
+        {
+            if (Node* t = st in trailers)
+            {
+                keptNodes[st] = *t;
+            }
+            else if (trailing !is null)
+            {
+                if (Node t = trailing(st))
+                {
+                    keptNodes[st] = t;
+                }
+            }
+            if (Node* t = st in keptNodes)
+            {
+                shown ~= *t;
+            }
+            if (TabStrip* s = st in strips)
+            {
+                keptStrips[st] = *s;
+            }
+        }
+        trailers = keptNodes;
+        strips = keptStrips;
         setChildren(shown);
         refocus();
+        tabsRead.set(tabsRead.peek + 1);
+    }
+
+    /// Takes tab titles, icons, tooltips and marks from `info`, read again whenever a signal it reads changes or a
+    /// pane comes or goes. A null title there leaves the one from `titles`.
+    void setTabInfo(TabInfo delegate(string pane) info)
+    {
+        tabInfo = info;
+        tabsRead.set(tabsRead.peek + 1);
+    }
+
+    /// Reads `setTabInfo`'s delegate again, for data it reads outside signals.
+    void refreshTabs()
+    {
+        tabsRead.set(tabsRead.peek + 1);
+    }
+
+    /// Puts the node `make` returns at the right end of each stack's tab bar, such as a pane number. Asked once per
+    /// stack, null for none.
+    void setTrailing(Node delegate(DockNode stack) make)
+    {
+        trailing = make;
+        trailers = null;
+        sync();
+        markNeedsLayout();
+    }
+
+    /// Reads `tabInfo` for every pane, tracking the signals it reads.
+    private void readTabs()
+    {
+        tabsRead.get;
+        TabInfo[string] next;
+        if (tabInfo !is null)
+        {
+            foreach (string id; space.paneIds)
+            {
+                next[id] = tabInfo(id);
+            }
+        }
+        infos = next;
+        markNeedsLayout();
     }
 
     /// Shows `s` instead, dropping any drag.
@@ -1151,16 +1234,22 @@ final class DockView : Node, WindowKeys, AccessPartTree
         }
     }
 
-    /// Listens for Escape during drags.
+    /// Listens for Escape during drags and starts reading tab content.
     override void onAttach()
     {
         tree.addWindowKeys(this);
+        runWithOwner(null, { reader = effect(&readTabs); });
     }
 
-    /// Stops listening.
+    /// Stops listening and reading tab content.
     override void onDetach()
     {
         tree.removeWindowKeys(this);
+        if (reader !is null)
+        {
+            reader.dispose();
+            reader = null;
+        }
     }
 
     /// Escape during a drag puts things back as they were at the press.
@@ -1235,6 +1324,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
         case Role.tab:
             DockStyle s = tree.style!DockStyle();
             a.label = titleOf(it.stack.panes[it.tab]);
+            a.description = infoOf(it.stack.panes[it.tab]).tooltip;
             a.selected = tri(it.tab == it.stack.active);
             a.allow(AccessAction.click);
             r = tabRects(it.stack, s)[it.tab].translate(at);
@@ -1296,8 +1386,50 @@ final class DockView : Node, WindowKeys, AccessPartTree
     /// Title of pane `id`.
     private string titleOf(string id)
     {
-        string* t = id in titles;
-        return t is null || *t is null ? id : *t;
+        return infoOf(id).title;
+    }
+
+    /// What the tab of pane `id` shows: `tabInfo`'s last answer, its title from `titles` or the ID when null.
+    private TabInfo infoOf(string id)
+    {
+        TabInfo t;
+        if (TabInfo* i = id in infos)
+        {
+            t = *i;
+        }
+        if (t.title is null)
+        {
+            string* s = id in titles;
+            t.title = s is null || *s is null ? id : *s;
+        }
+        return t;
+    }
+
+    /// Drawing sizes and colors from `s`.
+    private static TabLook lookOf(const ref DockStyle s)
+    {
+        return TabLook(s.font, s.size, s.tabPadX, s.iconSize, s.iconGap, s.closeSize, s.closeGap, s.markGap,
+            s.maxTitle, s.closeHover, s.track, s.progress);
+    }
+
+    /// Width of the tab bar of `stack` left for tabs, beside its trailing node.
+    private float room(DockNode stack)
+    {
+        Node* t = stack in trailers;
+        return stack.rect.w - (t is null ? 0 : t.size.w);
+    }
+
+    /// Tab widths of `stack`.
+    private float[] widthsOf(DockNode stack, const ref DockStyle s)
+    {
+        TabLook l = lookOf(s);
+        float[] ws;
+        foreach (string p; stack.panes)
+        {
+            TabInfo info = infoOf(p);
+            ws ~= rowWidth(tree.text, l, info, canClose(p) || info.modified);
+        }
+        return ws;
     }
 
     /// Area under the tab bar of `stack`, local coordinates.
@@ -1307,15 +1439,14 @@ final class DockView : Node, WindowKeys, AccessPartTree
         return Rect(r.x, r.y + tabBarHeight, r.w, r.h - tabBarHeight);
     }
 
-    /// Tab rects of `stack`, local coordinates.
+    /// Tab rects of `stack` as scrolled, local coordinates.
     private Rect[] tabRects(DockNode stack, const ref DockStyle s)
     {
         Rect[] rs;
-        float x = stack.rect.x;
-        foreach (string p; stack.panes)
+        TabStrip* st = stack in strips;
+        float x = stack.rect.x - (st is null ? 0 : round(st.scrollX));
+        foreach (float w; widthsOf(stack, s))
         {
-            float w = tree.text.measure(s.font, s.size, titleOf(p)) + s.tabPadX * 2
-                + (canClose(p) ? s.closeGap + s.closeSize : 0);
             rs ~= Rect(x, stack.rect.y, w, tabBarHeight);
             x += w;
         }
@@ -1326,13 +1457,6 @@ final class DockView : Node, WindowKeys, AccessPartTree
     private bool canClose(string id)
     {
         return onCloseRequest !is null && (closable is null || closable(id));
-    }
-
-    /// Close button of tab rect `t`.
-    private static Rect closeRect(Rect t, const ref DockStyle s)
-    {
-        float c = s.closeSize;
-        return Rect(t.right - s.tabPadX - c, t.y + round((t.h - c) / 2), c, c);
     }
 
     /// Smallest size of `n` by `minPane`: splits add up their children along their direction.
@@ -1384,6 +1508,11 @@ final class DockView : Node, WindowKeys, AccessPartTree
                         p.layout(Constraints.tight(Size(r.w, r.h)));
                         p.offset = r.pos;
                     }
+                }
+                if (Node* t = n in trailers)
+                {
+                    t.layout(Constraints.loose(Size(n.rect.w / 2, tabBarHeight)));
+                    t.offset = Point(n.rect.right - t.size.w, n.rect.y + round((tabBarHeight - t.size.h) / 2));
                 }
                 return;
             }
@@ -1451,16 +1580,34 @@ final class DockView : Node, WindowKeys, AccessPartTree
         }
     }
 
-    /// Tab bar of `n`, close buttons on its chosen and hovered tabs.
+    /// Tab bar of `n`: tabs scrolled to show the chosen one, close buttons on the chosen and hovered tabs, faded
+    /// edges where tabs are cut off, then the trailing node.
     private void paintBar(ref PaintContext ctx, Point origin, DockNode n, const ref DockStyle s)
     {
+        TabLook l = lookOf(s);
         Rect bar = Rect(n.rect.x, n.rect.y, n.rect.w, tabBarHeight).translate(origin);
         ctx.list.rect(bar, s.tabBar);
         ctx.list.hline(bar.x, bar.right, bar.bottom - 1, s.border);
-        ctx.clipped(bar, {
+        float[] ws = widthsOf(n, s);
+        TabStrip* st = &strips.require(n);
+        st.settle(ws, n.active, room(n), s.fade);
+        Rect area = Rect(bar.x, bar.y, room(n), bar.h);
+        ctx.clipped(area, {
+            bool faded = st.pushFade(*ctx.list, area, ws, s.fade);
+            scope (exit)
+            {
+                if (faded)
+                {
+                    ctx.list.popFade();
+                }
+            }
             foreach (size_t i, Rect t; tabRects(n, s))
             {
                 Rect tr = t.translate(origin);
+                if (tr.right < area.x || tr.x > area.right)
+                {
+                    continue;
+                }
                 bool active = i == n.active;
                 if (active)
                 {
@@ -1474,27 +1621,20 @@ final class DockView : Node, WindowKeys, AccessPartTree
                     ctx.list.rect(Rect(tr.x, tr.y, tr.w, tr.h - 1), s.tabHover);
                 }
                 Color ink = active ? s.textActive : s.text;
-                paintTitle(ctx, tr, n.panes[i], ink, s);
-                if ((active || over) && canClose(n.panes[i]))
+                TabInfo info = infoOf(n.panes[i]);
+                paintRow(ctx, l, info, tr, ink, false);
+                bool close = (active || over) && canClose(n.panes[i]);
+                if (close || info.modified)
                 {
-                    Rect cr = closeRect(tr, s);
-                    if (over && hot.kind == DockHit.Kind.close)
-                    {
-                        ctx.list.rect(cr.inset(-3), s.closeHover, 3);
-                    }
-                    paintIcon(*ctx.list, Icon.close, cr, ink);
+                    paintSlot(ctx, l, slotRect(tr, l), close, close && over && hot.kind == DockHit.Kind.close,
+                        info.modified, ink);
                 }
             }
         });
-    }
-
-    /// Title of pane `id` in tab rect `tr`, window coordinates.
-    private void paintTitle(ref PaintContext ctx, Rect tr, string id, Color c, const ref DockStyle s)
-    {
-        TextSystem ts = ctx.text;
-        float top = round(tr.y + (tr.h - ts.lineHeight(s.font, s.size)) / 2);
-        ctx.list.text(ts.shape(s.font, s.size, titleOf(id)), Point(tr.x + s.tabPadX, top + ts.ascent(s.font, s.size)),
-            c);
+        if (Node* t = n in trailers)
+        {
+            paintChild(ctx, origin, *t);
+        }
     }
 
     /// While docking: the area a drop would fill or the tab insertion mark, the drop buttons, and the
@@ -1541,12 +1681,14 @@ final class DockView : Node, WindowKeys, AccessPartTree
         }
         if (mode == Drag.tab)
         {
-            float w = ctx.text.measure(s.font, s.size, titleOf(moving)) + s.tabPadX * 2;
+            TabLook l = lookOf(s);
+            TabInfo info = infoOf(moving);
+            float w = rowWidth(ctx.text, l, info, false);
             Rect t = Rect(pointer.x + 14, pointer.y + 14, w, tabBarHeight).translate(origin);
             ctx.list.shadow(t, 0, s.shadowBlur / 2, s.shadow);
             ctx.list.rect(t, s.tabActive, 0, s.window, 1);
             ctx.list.rect(Rect(t.x, t.y, t.w, 2), s.accent);
-            paintTitle(ctx, t, moving, s.textActive, s);
+            paintRow(ctx, l, info, t, s.textActive, false);
         }
     }
 
@@ -1773,18 +1915,23 @@ final class DockView : Node, WindowKeys, AccessPartTree
             return DockHit(DockHit.Kind.content, stack);
         }
         DockStyle s = tree.style!DockStyle();
+        TabLook l = lookOf(s);
+        if (p.x >= stack.rect.x + room(stack))
+        {
+            return DockHit(DockHit.Kind.bar, stack);
+        }
         foreach (size_t i, Rect t; tabRects(stack, s))
         {
             if (t.contains(p))
             {
-                bool x = canClose(stack.panes[i]) && closeRect(t, s).inset(-3).contains(p);
+                bool x = canClose(stack.panes[i]) && slotRect(t, l).inset(-3).contains(p);
                 return DockHit(x ? DockHit.Kind.close : DockHit.Kind.tab, stack, i);
             }
         }
         return DockHit(DockHit.Kind.bar, stack);
     }
 
-    /// Tab bars, splitters and window borders belong to the view, pane content to the panes.
+    /// Tab bars, splitters and window borders belong to the view, pane content and trailing nodes to themselves.
     override Node hitTest(Point p, Point origin)
     {
         if (Rect(origin.x, origin.y, size.w, size.h).contains(p) == false)
@@ -1792,6 +1939,19 @@ final class DockView : Node, WindowKeys, AccessPartTree
             return null;
         }
         DockHit h = hitAt(p - origin);
+        if (h.kind == DockHit.Kind.bar)
+        {
+            if (Node* t = h.node in trailers)
+            {
+                if (t.parent is this)
+                {
+                    if (Node hit = t.hitTest(p, origin + t.offset))
+                    {
+                        return hit;
+                    }
+                }
+            }
+        }
         if (h.kind == DockHit.Kind.content && h.node.panes.length > 0)
         {
             if (Node* n = h.node.panes[h.node.active] in panes)
@@ -1887,6 +2047,40 @@ final class DockView : Node, WindowKeys, AccessPartTree
         {
             onCloseRequest(closingPane);
         }
+    }
+
+    /// Scrolls the tab bar under the pointer when its tabs do not fit.
+    override bool onWheel(ref const WheelEvent e)
+    {
+        DockHit h = hitAt(e.pos - bounds.pos);
+        if (h.kind != DockHit.Kind.tab && h.kind != DockHit.Kind.close && h.kind != DockHit.Kind.bar)
+        {
+            return false;
+        }
+        DockStyle s = tree.style!DockStyle();
+        TabStrip* st = &strips.require(h.node);
+        if (st.wheel(e.dy != 0 ? e.dy : e.dx, widthsOf(h.node, s), room(h.node)) == false)
+        {
+            return false;
+        }
+        setHot(hitAt(e.pos - bounds.pos));
+        markNeedsPaint();
+        return true;
+    }
+
+    /// Tooltip of the tab under window point `p`, else the view's own.
+    override string tooltipAt(Point p)
+    {
+        DockHit h = hitAt(p - bounds.pos);
+        if (h.kind == DockHit.Kind.tab || h.kind == DockHit.Kind.close)
+        {
+            string t = infoOf(h.node.panes[h.index]).tooltip;
+            if (t.length > 0)
+            {
+                return t;
+            }
+        }
+        return tooltip;
     }
 
     /// Opens `tabMenu` for the tab under a right press at window point `p`. Not from the keyboard, tabs take no
@@ -2653,16 +2847,17 @@ unittest
     DockStyle s = f.t.style!DockStyle();
     DockNode bw = f.v.space.find("watch");
     float plain = f.v.tabRects(bw, s)[1].w;
+    float memory = f.v.tabRects(f.v.space.find("memory"), s)[0].w;
     string[] asked;
     f.v.onCloseRequest = (string p) { asked ~= p; };
     f.v.closable = (string p) => p != "memory";
     assert(f.v.tabRects(bw, s)[1].w == plain + s.closeGap + s.closeSize);
-    assert(f.v.tabRects(f.v.space.find("memory"), s)[0].w == f.v.tabRects(bw, s)[1].w - s.closeGap - s.closeSize
-        + f.t.text.measure(s.font, s.size, "memory") - f.t.text.measure(s.font, s.size, "watch"), "not closable");
+    assert(f.v.tabRects(f.v.space.find("memory"), s)[0].w == memory, "not closable");
 
     Point x(string pane, size_t i)
     {
-        Rect c = DockView.closeRect(f.v.tabRects(f.v.space.find(pane), s)[i], s);
+        TabLook l = DockView.lookOf(s);
+        Rect c = slotRect(f.v.tabRects(f.v.space.find(pane), s)[i], l);
         return Point(c.x + c.w / 2, c.y + c.h / 2);
     }
 
@@ -2801,4 +2996,109 @@ unittest
     h.inject(PointerKind.down, Point(600, 400), 1, 3);
     h.inject(PointerKind.up, Point(600, 400), 1, 3);
     assert(asked == "watch" && m.isOpen == false, "not over a tab");
+}
+
+// Tab content from `setTabInfo` follows its signals, tabs show their tooltips, and new panes are asked too.
+unittest
+{
+    import dentrite.signals : signal;
+    import std.algorithm.searching : canFind;
+
+    DockFixture f = DockFixture.make();
+    scope (exit)
+    {
+        f.dispose();
+    }
+    DockStyle s = f.t.style!DockStyle();
+    DockNode bw = f.v.space.find("watch");
+    float w = f.v.tabRects(bw, s)[1].w;
+    Signal!bool dirty = signal(false);
+    string[] asked;
+    f.v.setTabInfo((string p) {
+        asked ~= p;
+        return p == "watch" ? TabInfo(null, tooltip: "/w", modified: dirty.get) : TabInfo.init;
+    });
+    assert(f.v.titleOf("watch") == "watch" && f.v.tabRects(bw, s)[1].w == w, "a null title keeps the pane's");
+    dirty.set(true);
+    assert(f.v.tabRects(bw, s)[1].w == w + s.closeGap + s.closeSize, "room for the dot");
+    assert(f.v.tooltipAt(f.tab("watch", 1)) == "/w" && f.v.tooltipAt(f.tab("breakpoints", 0)) is null);
+    assert(f.v.tooltipAt(Point(200, 300)) is null, "pane content");
+    asked = null;
+    f.v.addPane("log", new Fixed(Size.init), "Log");
+    assert(asked.canFind("log"));
+}
+
+// Trailing nodes sit at the right end of their stack's tab bar, take presses there, and go with their stack.
+unittest
+{
+    DockFixture f = DockFixture.make();
+    scope (exit)
+    {
+        f.dispose();
+    }
+    int made;
+    f.v.setTrailing((DockNode st) {
+        ++made;
+        return new Fixed(Size(30, 16));
+    });
+    f.t.flush();
+    DockNode memory = f.v.space.find("memory");
+    Node t = f.v.trailers[memory];
+    assert(made == 3 && t.bounds == Rect(memory.rect.right - 30, memory.rect.y + 4, 30, 16));
+    Point at = Point(memory.rect.right - 15, memory.rect.y + 12);
+    assert(f.v.hitTest(at, Point(0, 0)) is t && f.v.room(memory) == memory.rect.w - 30);
+
+    f.v.addPane("log", new Fixed(Size.init), "Log", memory, Zone.bottom);
+    f.t.flush();
+    assert(made == 4 && f.v.trailers[memory] is t, "kept for the old stack, made for the new one");
+    f.v.removePane("memory");
+    f.t.flush();
+    assert(t.parent is null && (memory in f.v.trailers) is null);
+}
+
+// A tab bar with more tabs than room scrolls the chosen tab into view, scrolls with the wheel, and keeps tabs out
+// of the trailing node's room.
+unittest
+{
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.host : Host;
+    import dentrite.platform : WindowOptions;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    Host h = new Host(new HeadlessPlatform(1004, 604), new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    Node[string] ps;
+    foreach (string id; ["source", "breakpoints", "watch", "memory"])
+    {
+        ps[id] = new Fixed(Size.init);
+    }
+    DockView v = new DockView(sample(), ps, null);
+    v.setTrailing((DockNode st) => new Fixed(Size(40, 16)));
+    h.setRoot(v);
+    h.frame();
+    DockNode src = v.space.find("source");
+    foreach (int i; 0 .. 12)
+    {
+        string id = "a long file name " ~ cast(char)('a' + i);
+        v.addPane(id, new Fixed(Size.init), id, src);
+    }
+    v.select("source");
+    h.frame();
+    DockStyle s = h.tree.style!DockStyle();
+    assert(v.tabRects(src, s)[0].x == 0);
+    v.select("a long file name l");
+    h.frame();
+    Rect last = v.tabRects(src, s)[$ - 1];
+    assert(last.right == src.rect.w - 40, "the last tab scrolled in, left of the trailing node");
+    assert(v.hitAt(Point(src.rect.w - 20, 12)).kind == DockHit.Kind.bar);
+    WheelEvent w = WheelEvent(Point(100, 12), 0, -1e6);
+    assert(v.onWheel(w));
+    assert(v.tabRects(src, s)[0].x == 0);
+    w.pos = Point(100, 300);
+    assert(v.onWheel(w) == false, "not over a tab bar");
 }

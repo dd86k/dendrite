@@ -2,13 +2,16 @@
 module dentrite.widgets.tabs;
 
 import dentrite.access : AccessParts;
+import dentrite.draw : DrawList;
 import dentrite.node;
 import dentrite.signals : Signal, effect;
 import dentrite.text;
 import dentrite.widgets.icons;
 import std.algorithm.comparison : clamp, max, min;
 import std.algorithm.searching : any;
-import std.math : abs, ceil, isInfinity, round;
+import std.math : abs, ceil, isInfinity, isNaN, round;
+import std.string : stripRight;
+import std.utf : stride;
 
 /// Look of a tab strip.
 struct TabsStyle
@@ -36,8 +39,237 @@ struct TabsStyle
     float stackPadY = 10;   /// in stacked tabs, space above the icon and below the title
     float stackGap = 5;     /// in stacked tabs, space between the icon and the title
     float fade = 24;        /// fade at a cut edge of a strip wider than its space
+    float markGap = 6;      /// space before each mark after a title
+    float maxTitle = 0;     /// widest title before it is shortened, 0 for no limit
+    Color track = Color(0xff, 0xff, 0xff, 0x20);       /// unfilled part of a tab's progress bar
+    Color progress = Color(0x4c, 0x8d, 0xf6, 0xff);    /// filled part of a tab's progress bar
     FontKind font = FontKind.ui; /// title font
     float size = 13;        /// title size
+}
+
+/// What a tab shows, for `TabBar.setTabs` and `DockView.tabInfo`. Marks follow the title in field order. The
+/// modified dot sits where the close button goes and gives way to it on the chosen or hovered tab.
+struct TabInfo
+{
+    string title;   /// title, in a dock null for the pane's title
+    Icon icon;      /// icon before the title, `Icon.none` for none
+    string tooltip; /// text shown while the pointer rests on the tab, null for none
+    string badge;   /// short text after the title, such as "×2", null for none
+    bool locked;    /// lock after the title, such as for a read-only file
+    float progress = float.nan; /// small bar after the title, filled from 0 to 1, NaN for none
+    bool modified;  /// dot for unsaved changes
+}
+
+/// Sizes and colors for drawing tabs, from `TabsStyle` or `DockStyle`.
+package(dentrite) struct TabLook
+{
+    FontKind font;    /// title font
+    float size;       /// title size
+    float padX;       /// space between the content and the sides of a tab
+    float iconSize;   /// icon and lock size
+    float iconGap;    /// space after the icon
+    float closeSize;  /// close icon size
+    float closeGap;   /// space before the close icon
+    float markGap;    /// space before each mark
+    float maxTitle;   /// widest title before it is shortened, 0 for no limit
+    Color closeHover; /// close button under the pointer
+    Color track;      /// unfilled part of a progress bar
+    Color progress;   /// filled part of a progress bar
+}
+
+/// Width of a tab's progress bar.
+private enum float barW = 16;
+
+/// Height of a tab's progress bar.
+private enum float barH = 3;
+
+/// `title` cut at a code point with an ellipsis added to fit `maxW`, whole when it fits or `maxW` is 0.
+package(dentrite) string shortTitle(TextSystem t, FontKind font, float size, string title, float maxW)
+{
+    if (maxW <= 0 || t.measure(font, size, title) <= maxW)
+    {
+        return title;
+    }
+    size_t[] cuts;
+    for (size_t i = 0; i < title.length; i += stride(title, i))
+    {
+        cuts ~= i;
+    }
+    size_t lo = 0;
+    size_t hi = cuts.length - 1;
+    while (lo < hi)
+    {
+        size_t mid = (lo + hi + 1) / 2;
+        if (t.measure(font, size, title[0 .. cuts[mid]].stripRight ~ "…") <= maxW)
+        {
+            lo = mid;
+        }
+        else
+        {
+            hi = mid - 1;
+        }
+    }
+    return title[0 .. cuts[lo]].stripRight ~ "…";
+}
+
+/// Width of the title line of `info`: the title shortened to `l.maxTitle`, then its marks.
+package(dentrite) float lineWidth(TextSystem t, const ref TabLook l, const ref TabInfo info)
+{
+    float w = t.measure(l.font, l.size, shortTitle(t, l.font, l.size, info.title, l.maxTitle));
+    if (info.badge.length > 0)
+    {
+        w += l.markGap + t.measure(l.font, l.size, info.badge);
+    }
+    if (info.locked)
+    {
+        w += l.markGap + l.iconSize;
+    }
+    if (isNaN(info.progress) == false)
+    {
+        w += l.markGap + barW;
+    }
+    return w;
+}
+
+/// Width of a tab laid out in a row: sides, icon, title line, and the close slot when `slot`.
+package(dentrite) float rowWidth(TextSystem t, const ref TabLook l, const ref TabInfo info, bool slot)
+{
+    return ceil(l.padX * 2 + (info.icon.empty ? 0 : l.iconSize + l.iconGap) + lineWidth(t, l, info)
+        + (slot ? l.closeGap + l.closeSize : 0));
+}
+
+/// Draws the title line of `info` from `x` on baseline `base`, marks centered on `mid`.
+package(dentrite) void paintLine(ref PaintContext ctx, const ref TabLook l, const ref TabInfo info, float x,
+    float base, float mid, Color ink)
+{
+    TextSystem t = ctx.text;
+    string title = shortTitle(t, l.font, l.size, info.title, l.maxTitle);
+    ctx.list.text(t.shape(l.font, l.size, title), Point(x, base), ink);
+    x += t.measure(l.font, l.size, title);
+    if (info.badge.length > 0)
+    {
+        x += l.markGap;
+        ctx.list.text(t.shape(l.font, l.size, info.badge), Point(x, base), ink);
+        x += t.measure(l.font, l.size, info.badge);
+    }
+    if (info.locked)
+    {
+        x += l.markGap;
+        paintIcon(*ctx.list, Icon.lock, Rect(x, round(mid - l.iconSize / 2), l.iconSize, l.iconSize), ink);
+        x += l.iconSize;
+    }
+    if (isNaN(info.progress) == false)
+    {
+        x += l.markGap;
+        Rect bar = Rect(x, round(mid - barH / 2), barW, barH);
+        ctx.list.rect(bar, l.track, barH / 2);
+        float f = clamp(info.progress, 0f, 1f);
+        if (f > 0)
+        {
+            ctx.list.rect(Rect(bar.x, bar.y, max(barH, round(barW * f)), barH), l.progress, barH / 2);
+        }
+    }
+}
+
+/// Draws the icon and title line of `info` in tab rect `r`, a picture icon at half strength when `faded`.
+package(dentrite) void paintRow(ref PaintContext ctx, const ref TabLook l, TabInfo info, Rect r,
+    Color ink, bool faded)
+{
+    TextSystem t = ctx.text;
+    float mid = r.y + r.h / 2;
+    float base = r.y + round((r.h - t.lineHeight(l.font, l.size)) / 2) + t.ascent(l.font, l.size);
+    float x = r.x + l.padX;
+    if (info.icon.empty == false)
+    {
+        Rect ir = Rect(x, r.y + round((r.h - l.iconSize) / 2), l.iconSize, l.iconSize);
+        paintIcon(*ctx.list, info.icon, ir, ink, faded);
+        x += l.iconSize + l.iconGap;
+    }
+    paintLine(ctx, l, info, x, base, mid, ink);
+}
+
+/// Place of the close button or modified dot in tab rect `r`.
+package(dentrite) Rect slotRect(Rect r, const ref TabLook l)
+{
+    float c = l.closeSize;
+    return Rect(r.right - l.padX - c, r.y + round((r.h - c) / 2), c, c);
+}
+
+/// Draws close slot `r`: the close button when `close`, highlighted when `hot`, else the dot when `modified`.
+package(dentrite) void paintSlot(ref PaintContext ctx, const ref TabLook l, Rect r, bool close, bool hot,
+    bool modified, Color ink)
+{
+    if (close)
+    {
+        if (hot)
+        {
+            ctx.list.rect(r.inset(-3), l.closeHover, 3);
+        }
+        paintIcon(*ctx.list, Icon.close, r, ink);
+    }
+    else if (modified)
+    {
+        float d = round(l.closeSize * 0.75f);
+        ctx.list.rect(Rect(r.x + round((r.w - d) / 2), r.y + round((r.h - d) / 2), d, d), ink, d / 2);
+    }
+}
+
+/// Horizontal scrolling of a row of tabs wider than its room, for `TabBar` and the dock.
+package(dentrite) struct TabStrip
+{
+    float scrollX = 0;         /// shift of the row
+    bool reveal = true;        /// scroll the chosen tab into view at the next `settle`
+    size_t shown = size_t.max; /// chosen tab at the last `settle`
+
+    /// Width of every tab together.
+    static float total(const(float)[] widths)
+    {
+        float w = 0;
+        foreach (float x; widths)
+        {
+            w += x;
+        }
+        return w;
+    }
+
+    /// Scrolls tab `chosen` into view when it changed or `reveal` is set, clear of edge fades `fade` wide, then
+    /// keeps the scroll in range, for tabs `widths` in `room`.
+    void settle(const(float)[] widths, size_t chosen, float room, float fade)
+    {
+        if ((reveal || chosen != shown) && chosen < widths.length)
+        {
+            float x0 = total(widths[0 .. chosen]);
+            // its start first when it does not fit
+            scrollX = min(max(scrollX, x0 + widths[chosen] - room + fade), x0 - fade);
+        }
+        reveal = false;
+        shown = chosen;
+        scrollX = clamp(scrollX, 0, max(0f, total(widths) - room));
+    }
+
+    /// Scrolls by `d` for tabs `widths` in `room`. False when they fit.
+    bool wheel(float d, const(float)[] widths, float room)
+    {
+        float over = total(widths) - room;
+        if (over <= 0)
+        {
+            return false;
+        }
+        scrollX = clamp(scrollX + d, 0, over);
+        return true;
+    }
+
+    /// Fades the edges of `area` with tabs cut off past them, up to `fade` wide. True if it pushed a fade to pop.
+    bool pushFade(ref DrawList list, Rect area, const(float)[] widths, float fade)
+    {
+        float over = total(widths) - area.w;
+        if (over <= 0)
+        {
+            return false;
+        }
+        list.pushFade(area, min(fade, round(scrollX)), min(fade, over - round(scrollX)));
+        return true;
+    }
 }
 
 /// Strip of tab titles bound to the index of the chosen tab. Build it with `tabBar`, or get one inside `tabs`.
@@ -47,18 +279,18 @@ struct TabsStyle
 /// set, tabs show a close button when chosen or under the pointer, and a middle click closes too.
 /// Closing only calls `onClose`, which updates titles and index. Disabled tabs show dimmed, and presses, keys and
 /// screen readers skip them. Disabling the chosen tab leaves it chosen, so move the choice first.
+/// `setTabs` or the `TabInfo` form of `tabBar` adds tooltips and marks, and the `maxTitle` style shortens long titles.
 final class TabBar : Node, AccessParts
 {
     void delegate(size_t index) onClose; /// runs to close tab `index`, null for tabs without a close button
     bool stacked;                          /// icon above the title instead of before it, set before the first layout
     private Signal!size_t current; /// index of the chosen tab
-    private string[] titles;       /// tab titles
-    private Icon[] icons;         /// tab icons, may be shorter than `titles`
-    private bool[] disabled;       /// disabled tabs, may be shorter than `titles`
+    private TabInfo[] tabs;        /// title, icon, tooltip and marks of each tab
+    private Icon[] icons;         /// tab icons, may be shorter than `tabs`
+    private bool[] disabled;       /// disabled tabs, may be shorter than `tabs`
     private float[] widths;        /// tab widths from the last layout
     private size_t shown;          /// `current` last read
-    private float scrollX = 0;     /// strip shift
-    private bool reveal = true;    /// scroll the chosen tab into view at the next paint
+    private TabStrip strip;        /// scrolling
     private ptrdiff_t hot = -1;    /// tab under the pointer, or -1
     private bool hotClose;         /// pointer over the close button of `hot`
     private ptrdiff_t pressedClose = -1; /// tab whose close button or middle button was pressed, or -1
@@ -74,7 +306,7 @@ final class TabBar : Node, AccessParts
             if (v != shown)
             {
                 shown = v;
-                reveal = true;
+                strip.reveal = true;
                 markNeedsPaint();
             }
         });
@@ -83,13 +315,35 @@ final class TabBar : Node, AccessParts
     /// Replaces the titles.
     void setTitles(string[] titles)
     {
-        if (titles != this.titles)
+        bool same = titles.length == tabs.length;
+        for (size_t i = 0; same && i < titles.length; ++i)
         {
-            this.titles = titles.dup;
-            hot = -1;
-            reveal = true;
-            markNeedsLayout();
+            same = titles[i] == tabs[i].title;
         }
+        if (same)
+        {
+            return;
+        }
+        tabs.length = titles.length;
+        foreach (size_t i, string t; titles)
+        {
+            tabs[i].title = t;
+        }
+        hot = -1;
+        strip.reveal = true;
+        markNeedsLayout();
+    }
+
+    /// Replaces titles, icons, tooltips and marks. Icons from `setIcons` win over the ones here.
+    void setTabs(TabInfo[] tabs)
+    {
+        if (tabs.length != this.tabs.length)
+        {
+            hot = -1;
+            strip.reveal = true;
+        }
+        this.tabs = tabs.dup;
+        markNeedsLayout();
     }
 
     /// Replaces the icons, empty or missing entries leave a tab text only.
@@ -125,7 +379,7 @@ final class TabBar : Node, AccessParts
     /// Nearest enabled tab from `from` stepping by `step` (1 or -1), `from` included, or -1.
     private ptrdiff_t enabledFrom(ptrdiff_t from, ptrdiff_t step) const
     {
-        for (ptrdiff_t i = from; i >= 0 && i < titles.length; i += step)
+        for (ptrdiff_t i = from; i >= 0 && i < tabs.length; i += step)
         {
             if (enabledAt(i))
             {
@@ -138,9 +392,9 @@ final class TabBar : Node, AccessParts
     /// Whether any tab has an icon.
     private bool anyIcon()
     {
-        foreach (ref const Icon i; icons)
+        foreach (size_t i; 0 .. tabs.length)
         {
-            if (i.empty == false)
+            if (iconOf(i).empty == false)
             {
                 return true;
             }
@@ -151,20 +405,45 @@ final class TabBar : Node, AccessParts
     /// Icon of tab `i`, or `Icon.none`.
     private Icon iconOf(size_t i)
     {
-        return i < icons.length ? icons[i] : Icon.none;
+        if (i < icons.length && icons[i].empty == false)
+        {
+            return icons[i];
+        }
+        return i < tabs.length ? tabs[i].icon : Icon.none;
+    }
+
+    /// Tab `i` with its icon from `iconOf`.
+    private TabInfo infoOf(size_t i)
+    {
+        TabInfo t = tabs[i];
+        t.icon = iconOf(i);
+        return t;
+    }
+
+    /// True if tab `i` keeps room for the close button or the modified dot.
+    private bool slotted(size_t i)
+    {
+        return onClose !is null || tabs[i].modified;
+    }
+
+    /// Drawing sizes and colors from `s`.
+    private static TabLook lookOf(const ref TabsStyle s)
+    {
+        return TabLook(s.font, s.size, s.padX, s.iconSize, s.iconGap, s.closeSize, s.closeGap, s.markGap, s.maxTitle,
+            s.closeHover, s.track, s.progress);
     }
 
     /// Number of tabs.
     size_t length() const
     {
-        return titles.length;
+        return tabs.length;
     }
 
     /// Rect of tab `i` in window coordinates, as laid out and scrolled.
     Rect tabRect(size_t i)
     {
         Rect b = bounds;
-        float x = b.x - round(scrollX);
+        float x = b.x - round(strip.scrollX);
         foreach (size_t k; 0 .. i)
         {
             x += widths[k];
@@ -181,14 +460,15 @@ final class TabBar : Node, AccessParts
     /// Number of tabs, each one an access part.
     size_t accessPartCount()
     {
-        return min(titles.length, widths.length);
+        return min(tabs.length, widths.length);
     }
 
     /// Tab `i` named by its title, selected when chosen.
     void describePart(size_t i, ref AccessInfo a, ref Rect r)
     {
         a.role = Role.tab;
-        a.label = titles[i];
+        a.label = tabs[i].title;
+        a.description = tabs[i].tooltip;
         a.selected = tri(i == shown);
         a.disabled = enabledAt(i) == false;
         a.allow(AccessAction.click);
@@ -209,40 +489,42 @@ final class TabBar : Node, AccessParts
     /// The chosen tab while the strip has focus.
     ptrdiff_t accessFocusPart()
     {
-        return focused && shown < titles.length ? shown : -1;
-    }
-
-    /// Close button of tab rect `r`.
-    private Rect closeRect(Rect r, const ref TabsStyle s)
-    {
-        float c = s.closeSize;
-        return Rect(r.right - s.padX - c, r.y + round((r.h - c) / 2), c, c);
+        return focused && shown < tabs.length ? shown : -1;
     }
 
     /// Width of every tab together.
     private float total() const
     {
-        float w = 0;
-        foreach (float x; widths)
-        {
-            w += x;
-        }
-        return w;
+        return TabStrip.total(widths);
+    }
+
+    /// Text of the tab under window point `p`, else the bar's own.
+    override string tooltipAt(Point p)
+    {
+        bool onClose_;
+        ptrdiff_t i = tabAt(p, onClose_);
+        return i >= 0 && tabs[i].tooltip.length > 0 ? tabs[i].tooltip : tooltip;
     }
 
     /// Tab widths from the titles, the bounded width or the sum, one line tall.
     protected override Size performLayout(Constraints c)
     {
         TabsStyle s = tree.style!TabsStyle();
+        TabLook l = lookOf(s);
         TextSystem t = tree.text;
-        widths.length = titles.length;
-        foreach (size_t i, string title; titles)
+        widths.length = tabs.length;
+        foreach (size_t i; 0 .. tabs.length)
         {
-            float tw = t.measure(s.font, s.size, title);
-            float content = stacked ? max(tw, iconOf(i).empty == false ? s.iconSize : 0f)
-                : tw + (iconOf(i).empty == false ? s.iconSize + s.iconGap : 0);
-            widths[i] = ceil(s.padX * 2 + content
-                + (onClose !is null ? s.closeGap + s.closeSize : 0));
+            TabInfo info = infoOf(i);
+            if (stacked)
+            {
+                float content = max(lineWidth(t, l, info), info.icon.empty == false ? s.iconSize : 0f);
+                widths[i] = ceil(s.padX * 2 + content + (slotted(i) ? s.closeGap + s.closeSize : 0));
+            }
+            else
+            {
+                widths[i] = rowWidth(t, l, info, slotted(i));
+            }
         }
         float h = t.lineHeight(s.font, s.size) + s.padY * 2;
         if (stacked)
@@ -260,12 +542,13 @@ final class TabBar : Node, AccessParts
         {
             return -1;
         }
-        foreach (size_t i; 0 .. titles.length)
+        TabLook l = lookOf(s);
+        foreach (size_t i; 0 .. min(tabs.length, widths.length))
         {
             Rect r = tabRect(i);
             if (r.contains(p))
             {
-                onClose_ = onClose !is null && closeRect(r, s).inset(-3).contains(p);
+                onClose_ = onClose !is null && slotRect(r, l).inset(-3).contains(p);
                 return i;
             }
         }
@@ -331,12 +614,10 @@ final class TabBar : Node, AccessParts
     /// Scrolls a strip wider than its space.
     override bool onWheel(ref const WheelEvent e)
     {
-        float over = total - size.w;
-        if (over <= 0)
+        if (strip.wheel(e.dy != 0 ? e.dy : e.dx, widths, size.w) == false)
         {
             return false;
         }
-        scrollX = clamp(scrollX + (e.dy != 0 ? e.dy : e.dx), 0, over);
         markNeedsPaint();
         return true;
     }
@@ -344,11 +625,11 @@ final class TabBar : Node, AccessParts
     /// Left and Right choose the neighbor enabled tab, Home and End the first and last enabled ones.
     override bool onKey(ref const KeyEvent e)
     {
-        if (titles.length == 0)
+        if (tabs.length == 0)
         {
             return false;
         }
-        ptrdiff_t last = titles.length - 1;
+        ptrdiff_t last = tabs.length - 1;
         ptrdiff_t at = min(shown, last);
         ptrdiff_t to;
         switch (e.key)
@@ -381,25 +662,14 @@ final class TabBar : Node, AccessParts
         markNeedsPaint();
     }
 
-    /// Strip, tabs with titles and close buttons, the mark under the chosen tab and the focus ring.
+    /// Strip, tabs with icons, titles, marks and close buttons, the mark under the chosen tab and the focus ring.
     override void paint(ref PaintContext ctx, Point origin)
     {
         TabsStyle s = ctx.style!TabsStyle();
+        TabLook l = lookOf(s);
         TextSystem t = ctx.text;
         Rect b = Rect(origin.x, origin.y, size.w, size.h);
-        float over = max(0f, total - size.w);
-        if (reveal && shown < widths.length)
-        {
-            float x0 = 0;
-            foreach (size_t k; 0 .. shown)
-            {
-                x0 += widths[k];
-            }
-            // keep the chosen tab clear of the fades, its start first when it does not fit
-            scrollX = min(max(scrollX, x0 + widths[shown] - size.w + s.fade), x0 - s.fade);
-            reveal = false;
-        }
-        scrollX = clamp(scrollX, 0, over);
+        strip.settle(widths, shown, size.w, s.fade);
         if (s.bar.a > 0)
         {
             ctx.list.rect(b, s.bar);
@@ -408,21 +678,17 @@ final class TabBar : Node, AccessParts
         {
             ctx.list.hline(b.x, b.right, b.bottom - 1, s.line);
         }
-        float base = b.y + round((b.h - t.lineHeight(s.font, s.size)) / 2) + t.ascent(s.font, s.size);
         ctx.clipped(b, {
-            if (over > 0)
-            {
-                ctx.list.pushFade(b, min(s.fade, round(scrollX)), min(s.fade, over - round(scrollX)));
-            }
+            bool faded = strip.pushFade(*ctx.list, b, widths, s.fade);
             scope (exit)
             {
-                if (over > 0)
+                if (faded)
                 {
                     ctx.list.popFade();
                 }
             }
-            float x = b.x - round(scrollX);
-            foreach (size_t i, string title; titles)
+            float x = b.x - round(strip.scrollX);
+            foreach (size_t i; 0 .. min(tabs.length, widths.length))
             {
                 Rect r = Rect(x, b.y, widths[i], b.h);
                 x += widths[i];
@@ -442,37 +708,30 @@ final class TabBar : Node, AccessParts
                 }
                 bool on = enabledAt(i);
                 Color ink = on == false ? s.textDisabled : active ? s.textActive : over_ ? s.textHover : s.text;
-                float tx = r.x + s.padX;
-                float tbase = base;
+                TabInfo info = infoOf(i);
                 if (stacked)
                 {
-                    float tw = t.measure(s.font, s.size, title);
-                    float closeW = onClose !is null ? s.closeGap + s.closeSize : 0;
-                    float cx = r.x + s.padX + (r.w - s.padX * 2 - closeW) / 2;
-                    tx = cx - tw / 2;
+                    float lw = lineWidth(t, l, info);
+                    float slotW = slotted(i) ? s.closeGap + s.closeSize : 0;
+                    float cx = r.x + s.padX + (r.w - s.padX * 2 - slotW) / 2;
                     float top = r.y + s.stackPadY;
-                    if (iconOf(i).empty == false)
+                    if (info.icon.empty == false)
                     {
                         Rect ir = Rect(cx - s.iconSize / 2, top, s.iconSize, s.iconSize);
-                        paintIcon(*ctx.list, iconOf(i), ir, ink, on == false);
+                        paintIcon(*ctx.list, info.icon, ir, ink, on == false);
                     }
-                    tbase = top + (anyIcon ? s.iconSize + s.stackGap : 0) + t.ascent(s.font, s.size);
+                    float lineTop = top + (anyIcon ? s.iconSize + s.stackGap : 0);
+                    paintLine(ctx, l, info, cx - lw / 2, lineTop + t.ascent(s.font, s.size),
+                        lineTop + t.lineHeight(s.font, s.size) / 2, ink);
                 }
-                else if (iconOf(i).empty == false)
+                else
                 {
-                    float iy = b.y + round((b.h - s.iconSize) / 2);
-                    paintIcon(*ctx.list, iconOf(i), Rect(tx, iy, s.iconSize, s.iconSize), ink, on == false);
-                    tx += s.iconSize + s.iconGap;
+                    paintRow(ctx, l, info, r, ink, on == false);
                 }
-                ctx.list.text(t.shape(s.font, s.size, title), Point(tx, tbase), ink);
-                if (onClose !is null && on && (active || over_))
+                if (slotted(i))
                 {
-                    Rect cr = closeRect(r, s);
-                    if (over_ && hotClose)
-                    {
-                        ctx.list.rect(cr.inset(-3), s.closeHover, 3);
-                    }
-                    paintIcon(*ctx.list, Icon.close, cr, ink);
+                    bool close = onClose !is null && on && (active || over_);
+                    paintSlot(ctx, l, slotRect(r, l), close, close && over_ && hotClose, info.modified, ink);
                 }
                 if (active)
                 {
@@ -500,6 +759,24 @@ TabBar tabBar(string[] delegate() titles, Signal!size_t current, void delegate(s
     effect(() {
         string[] t = titles();
         b.setTitles(t);
+        b.setDisabled(disabledOf(t.length, enabled));
+    });
+    return b;
+}
+
+/// Tab strip over `tabs` with icons, tooltips and marks choosing `current`:
+/// `tabBar(() => files.get.map!(f => TabInfo(f.name, tooltip: f.path, modified: f.dirty)).array, open)`. `onClose`
+/// adds close buttons, `stacked` puts icons above the titles. `enabled` says whether tab `index` can be chosen,
+/// null for all. The effect belongs to the current owner.
+TabBar tabBar(TabInfo[] delegate() tabs, Signal!size_t current, void delegate(size_t index) onClose = null,
+    bool stacked = false, bool delegate(size_t index) enabled = null)
+{
+    TabBar b = new TabBar(current);
+    b.onClose = onClose;
+    b.stacked = stacked;
+    effect(() {
+        TabInfo[] t = tabs();
+        b.setTabs(t);
         b.setDisabled(disabledOf(t.length, enabled));
     });
     return b;
@@ -857,4 +1134,69 @@ version (unittest)
     {
         return Point(r.x + r.w / 2, r.y + r.h / 2);
     }
+}
+
+// A strip scrolls a newly chosen tab into view clear of the fades, and keeps the scroll in range.
+unittest
+{
+    TabStrip s;
+    float[] ws = [100, 100, 100, 100];
+    s.settle(ws, 0, 250, 20);
+    assert(s.scrollX == 0);
+    s.settle(ws, 3, 250, 20);
+    assert(s.scrollX == 150, "last tab at the right end");
+    s.settle(ws, 1, 250, 20);
+    assert(s.scrollX == 80, "start clear of the left fade");
+    s.settle(ws, 1, 250, 20);
+    assert(s.scrollX == 80, "unchanged choice, no reveal");
+    assert(s.wheel(1000, ws, 250) && s.scrollX == 150);
+    assert(s.wheel(10, ws, 500) == false);
+}
+
+// Long titles shorten to `maxTitle`, marks and the modified dot widen tabs, and each tab shows its own tooltip.
+unittest
+{
+    import dentrite.containers : column, row;
+    import dentrite.host : Host;
+    import dentrite.signals : signal;
+    import dentrite.theme : Theme;
+    import dentrite.widgets.menu : menuHost;
+    import std.algorithm.searching : endsWith;
+
+    Host h = menuHost(600, 100);
+    scope (exit)
+    {
+        h.close();
+    }
+    h.tree.theme = new Theme("[tabs]\nmaxTitle = 80\n[tooltip]\ndelay = 0\n", "test");
+    Signal!size_t cur = signal(size_t(0));
+    Signal!bool dirty = signal(false);
+    TabBar bar = tabBar(() => [TabInfo("A rather long file name.bin", tooltip: "/data/a.bin"),
+        TabInfo("b.bin", tooltip: "/data/b.bin", badge: "×2", locked: true, progress: 0.5f, modified: dirty.get),
+        TabInfo("c.bin")], cur);
+    h.setRoot(column()(row()(bar)));
+    h.frame();
+    TextSystem t = h.tree.text;
+    TabsStyle s = h.tree.style!TabsStyle();
+    string cut = shortTitle(t, s.font, s.size, "A rather long file name.bin", 80);
+    assert(cut.endsWith("…") && cut.length < 20 && t.measure(s.font, s.size, cut) <= 80);
+    assert(shortTitle(t, s.font, s.size, "c.bin", 80) == "c.bin" && shortTitle(t, s.font, s.size, cut, 0) == cut);
+    assert(bar.tabRect(0).w == ceil(s.padX * 2 + t.measure(s.font, s.size, cut)));
+    float marks = s.markGap + t.measure(s.font, s.size, "×2") + s.markGap + s.iconSize + s.markGap + barW;
+    assert(bar.tabRect(1).w == ceil(s.padX * 2 + t.measure(s.font, s.size, "b.bin") + marks));
+    dirty.set(true);
+    h.frame();
+    assert(bar.tabRect(1).w == ceil(s.padX * 2 + t.measure(s.font, s.size, "b.bin") + marks + s.closeGap
+        + s.closeSize), "room for the dot");
+
+    h.inject(PointerKind.move, mid(bar.tabRect(0)));
+    h.frame();
+    h.frame();
+    assert(h.tooltips.text == "/data/a.bin");
+    h.inject(PointerKind.move, mid(bar.tabRect(1)));
+    h.frame();
+    assert(h.tooltips.text == "/data/b.bin", "moving on to the next tab");
+    h.inject(PointerKind.move, mid(bar.tabRect(2)));
+    h.frame();
+    assert(h.tooltips.shown == false, "no text on the third tab");
 }

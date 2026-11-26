@@ -54,7 +54,7 @@ The slider and the spin box share `s.width`, so either one moves the other.
 | `comboBox(items, signal)`, `comboBox(enumSignal)` | `combobox` | Combo boxes |
 | `progressBar(() => fraction)` | `progress` | Progress bars |
 | `iconView(icon)`, `imageView(image, fit)` | `icons`, `image` | Images |
-| `tabs(signal)(tab(title, page)...)`, `tabBar(titles, signal)` | `tabs` | Tabs |
+| `tabs(signal)(tab(title, page)...)`, `tabBar(titles, signal)`, `tabBar(() => tabInfos, signal)` | `tabs` | Tabs |
 | `listItem(onClick:, selected:, variant:)(content)` | `list` | Lists |
 
 Lists, trees and tables are in [chapter 5](05-collections.md); menus,

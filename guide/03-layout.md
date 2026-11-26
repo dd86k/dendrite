@@ -234,14 +234,20 @@ a wider space, such as a form or long text in a wide window.
 ## Other layouts
 
 The dock (`dentrite.dock`) arranges panes in tab stacks and splits that the
-user can drag, with floating windows and JSON save and restore. The view's
-`addPane`, `removePane`, `select` and `setTitle` change it from code,
-`current` holds the shown pane of the focused stack, `onLayout` runs after
-the user rearranges it, and `onCloseRequest` gets close button and middle
-click presses. `tabMenu` gives tabs a context menu, `onBarDoubleClick`
-runs on a double click on an empty tab bar, `floating = false` turns off
-floating windows, and `minPane` sets the smallest pane size. See the gallery's Dock page and
-`examples/debugger/source/app.d`.
+user can drag, with floating windows and JSON save and restore. See the
+gallery's Dock page and `examples/debugger/source/app.d`. A `DockView`:
+
+- changes panes from code with `addPane`, `removePane`, `select` and
+  `setTitle`,
+- holds the shown pane of the focused stack in `current`, and runs
+  `onLayout` after the user rearranges panes,
+- asks `onCloseRequest` on a close button or middle click, `tabMenu` for a
+  tab's context menu, and runs `onBarDoubleClick` on a double click on an
+  empty part of a tab bar,
+- takes icons, tooltips and marks for its tabs from `setTabInfo`, and a
+  node for the end of each tab bar from `setTrailing`,
+- keeps panes at least `minPane` big, and floats nothing with
+  `floating = false`.
 
 For a layout none of these give, write a node (chapter 10): its
 `performLayout` gets the constraints and positions the children.
