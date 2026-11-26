@@ -266,10 +266,12 @@ Node textBoxesPage()
     Signal!string shared_ = signal("Edit me in either box");
     Signal!bool editable = signal(false);
     Signal!string secret = signal("");
+    TextBox nameBox = textBox(name, placeholder: "Your name");
     return column(gap: 22)(
         section("Placeholder and binding", column(gap: 8)(
-            narrow(320, textBox(name, placeholder: "Your name")),
-            label(() => name.get.length == 0 ? "Type a name above" : "Hello, " ~ name.get ~ "!", "muted"),
+            row(gap: 8)(label("Name", for_: nameBox), narrow(272, nameBox)),
+            label(() => name.get.length == 0 ? "Type a name above" : "Hello, " ~ name.get ~ "!", "muted",
+                live: Live.polite),
         )),
         section("Two boxes, one signal", column(gap: 8)(
             narrow(320, textBox(shared_)),

@@ -142,6 +142,13 @@ enum : ubyte
 
 enum : ubyte
 {
+    ACCESSKIT_LIVE_OFF = 0,       /// changes not announced
+    ACCESSKIT_LIVE_POLITE = 1,    /// announced when idle
+    ACCESSKIT_LIVE_ASSERTIVE = 2, /// announced at once
+}
+
+enum : ubyte
+{
     ACCESSKIT_ROLE_UNKNOWN = 0,                /// role
     ACCESSKIT_ROLE_TEXT_RUN = 1,               /// ditto
     ACCESSKIT_ROLE_CELL = 2,                   /// ditto
@@ -194,6 +201,8 @@ __gshared
     C!(void function(accesskit_node*, const(char)* s, size_t length)) accesskit_node_set_label_with_length,
         accesskit_node_set_value_with_length, accesskit_node_set_description_with_length,
         accesskit_node_set_placeholder_with_length, accesskit_node_set_keyboard_shortcut_with_length;
+    /// Adds a node naming this one.
+    C!(void function(accesskit_node*, accesskit_node_id)) accesskit_node_push_labelled_by;
     /// Sets the children.
     C!(void function(accesskit_node*, size_t length, const(accesskit_node_id)* ids)) accesskit_node_set_children;
     /// Adds a supported action.
@@ -208,7 +217,7 @@ __gshared
     /// Sets a boolean state.
     C!(void function(accesskit_node*, bool)) accesskit_node_set_selected, accesskit_node_set_expanded;
     /// Sets the check state.
-    C!(void function(accesskit_node*, ubyte)) accesskit_node_set_toggled;
+    C!(void function(accesskit_node*, ubyte)) accesskit_node_set_toggled, accesskit_node_set_live;
     /// Sets a number.
     C!(void function(accesskit_node*, double)) accesskit_node_set_numeric_value, accesskit_node_set_min_numeric_value,
         accesskit_node_set_max_numeric_value, accesskit_node_set_numeric_value_step;
@@ -328,7 +337,8 @@ private enum string[] commonNames = ["accesskit_node_new", "accesskit_node_set_l
     "accesskit_node_set_children", "accesskit_node_add_action", "accesskit_node_set_bounds",
     "accesskit_node_set_transform", "accesskit_node_set_disabled", "accesskit_node_set_read_only",
     "accesskit_node_set_modal", "accesskit_node_set_multiselectable", "accesskit_node_set_selected",
-    "accesskit_node_set_expanded", "accesskit_node_set_toggled", "accesskit_node_set_numeric_value",
+    "accesskit_node_set_expanded", "accesskit_node_set_toggled", "accesskit_node_set_live",
+    "accesskit_node_push_labelled_by", "accesskit_node_set_numeric_value",
     "accesskit_node_set_min_numeric_value", "accesskit_node_set_max_numeric_value",
     "accesskit_node_set_numeric_value_step", "accesskit_node_set_level", "accesskit_node_set_position_in_set",
     "accesskit_node_set_size_of_set", "accesskit_node_set_character_lengths",

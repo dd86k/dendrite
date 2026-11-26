@@ -6,6 +6,7 @@
 /// IDs that the application maps to content.
 module dentrite.dock;
 
+import dentrite.access : AccessFrames;
 import dentrite.geom : Point, Rect;
 import dentrite.node;
 import dentrite.text : FontKind, TextSystem;
@@ -816,7 +817,7 @@ private enum float edgeIn = 2;
 /// Dropping on a button docks the pane there, on a tab bar inserts the tab, anywhere else floats the pane in
 /// a window inside the view. A floating window moves by its tab bar, or by its tab when it holds one pane,
 /// which also docks it. It resizes by its border. Escape cancels a drag.
-final class DockView : Node, WindowKeys
+final class DockView : Node, WindowKeys, AccessFrames
 {
     DockSpace space;       /// dock layout shown
     Node[string] panes;    /// pane content nodes by pane ID
@@ -927,6 +928,21 @@ final class DockView : Node, WindowKeys
         reset();
         markNeedsLayout();
         return true;
+    }
+
+    /// Exposes each shown pane inside a pane named by its tab title.
+    bool accessFrame(Node c, ref AccessInfo a, ref Rect r)
+    {
+        foreach (string id, Node n; panes)
+        {
+            if (n is c)
+            {
+                a.role = Role.pane;
+                a.label = titleOf(id);
+                return true;
+            }
+        }
+        return false;
     }
 
     /// Title of pane `id`.

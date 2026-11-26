@@ -9,7 +9,7 @@
 module dentrite.node;
 
 public import dentrite.geom;
-public import dentrite.access : AccessAction, AccessInfo, AccessRequest, Role, Toggle, Tri, tri;
+public import dentrite.access : AccessAction, AccessInfo, AccessRequest, Live, Role, Toggle, Tri, tri;
 import core.time : Duration, MonoTime;
 import dentrite.draw;
 import dentrite.overlay : Stage;
@@ -638,6 +638,8 @@ abstract class Node
     bool repaintBoundary; /// paints into its own layer even when not a relayout boundary. Set before attaching
     Scope owner;         /// scope owning the effects and scopes disposed with the node
     string accessName;   /// name for screen readers where the node has none, such as an icon button
+    Node labelledBy;     /// label naming it for screen readers where it has no `accessName`, see `label`'s `for_`
+    Live accessLive;     /// how screen readers announce changes to it, such as a status line
     ulong accessId;      /// stable id for assistive technologies, assigned on first use, see `dentrite.access`
 
     private Constraints constraints;  /// constraints of the last layout

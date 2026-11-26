@@ -42,7 +42,7 @@ import dentrite.widgets.textbox : TextBoxStyle;
 import dentrite.widgets.tooltip : TooltipStyle, Tooltips;
 import dentrite.widgets.tree : TreeStyle;
 import std.algorithm.comparison : max, min;
-import std.algorithm.searching : all;
+import std.algorithm.searching : all, any;
 import std.math : abs, ceil, round;
 import std.meta : AliasSeq;
 import std.stdio : stderr;
@@ -91,6 +91,12 @@ private struct Shown
     FrameMesh mesh;     /// its frame
 }
 
+/// Duration of `ms` milliseconds, such as a `ScrollStyle` delay.
+private Duration millis(float ms)
+{
+    return usecs(cast(long) (ms * 1000));
+}
+
 /// Retained UI on a platform and a renderer. One per process for now.
 class Host : Services
 {
@@ -126,6 +132,8 @@ class Host : Services
     private PointerEvent held;      /// left press held back
     private bool mayTake;           /// a drag scroller may take the last left press until it moves `dragStart`
     private Point pressAt;          /// where the last left press went down
+    private bool longArmed;         /// `longFrom` may still open a context menu, see `ScrollStyle.longPress`
+    private PointerEvent longFrom;  /// last touch or pen press on content with a context menu
     private PointerSource source;   /// device of the last pointer event
     private MonoTime pointerTime;   /// time of the last pointer event
     private Node focusNode;         /// keyboard focus
@@ -476,11 +484,16 @@ class Host : Services
         alarms.fire(frameTime);
         runHooks();
         tree.firePaintTimers(frameTime);
-        if (holding && frameTime - held.time >= usecs(cast(long) (tree.style!ScrollStyle().pressDelay * 1000)))
+        if (holding && frameTime - held.time >= millis(tree.style!ScrollStyle().pressDelay))
         {
             holding = false;
             mayTake = held.source != PointerSource.mouse;
             deliverPress(held);
+        }
+        if (longArmed && frameTime - longFrom.time >= millis(tree.style!ScrollStyle().longPress))
+        {
+            longArmed = false;
+            openHeldMenu();
         }
         tooltips.tick(frameTime);
         tree.frameStart = false;
@@ -799,6 +812,7 @@ class Host : Services
         case EventKind.focusLost:
             tooltips.hush();
             holding = false;
+            longArmed = false;
             mayTake = false;
             endComposition(focusNode);
             if (captureNode !is null)
@@ -954,6 +968,7 @@ class Host : Services
         sliding = false;
         holding = false;
         mayTake = false;
+        longArmed = false;
         tooltips.hush();
         Node under = tree.root.hitTest(e.pos, Point(0, 0));
         if (tree.root.pressOutside(under) && (e.button != 3 || tree.root.blocks(under)))
@@ -969,6 +984,12 @@ class Host : Services
         foreach (Node n; path)
         {
             n.onPressInside(e.pos);
+        }
+        if (e.button == 1 && e.source != PointerSource.mouse && path.any!((Node n) => n.hasContextMenu))
+        {
+            longArmed = true;
+            longFrom = e;
+            requestFrameAt(e.time + millis(tree.style!ScrollStyle().longPress));
         }
         if (e.button == 1 && holdPress(e))
         {
@@ -1018,7 +1039,7 @@ class Host : Services
         holding = true;
         held = e;
         ScrollStyle s = tree.style!ScrollStyle();
-        requestFrameAt(e.time + usecs(cast(long) (s.pressDelay * 1000)));
+        requestFrameAt(e.time + millis(s.pressDelay));
         return true;
     }
 
@@ -1078,6 +1099,32 @@ class Host : Services
         return false;
     }
 
+    /// Opens the context menu under a touch or pen press held still, cancelling the press its node had.
+    private void openHeldMenu()
+    {
+        if (sliding)
+        {
+            return;
+        }
+        holding = false;
+        mayTake = false;
+        if (captureNode !is null)
+        {
+            PointerEvent c = PointerEvent(PointerKind.cancel, mouse, 1, 0, 0, source, pointerTime);
+            captureNode.onPointer(c);
+            captureNode.pressed = false;
+            captureNode.markNeedsPaint();
+            captureNode = null;
+        }
+        for (Node n = reachableAt(longFrom.pos); n !is null; n = n.parent)
+        {
+            if (n.onContextMenu(longFrom.pos, false))
+            {
+                break;
+            }
+        }
+    }
+
     /// Delivers a press: focus, a context menu for the right button, then capture and delivery.
     private void deliverPress(PointerEvent e)
     {
@@ -1118,6 +1165,7 @@ class Host : Services
     /// recomputed. A slid release over nothing interactive closes the popups it is outside of, as a press would.
     private void release(ref PointerEvent e)
     {
+        longArmed = false;
         if (holding)
         {
             holding = false;
@@ -1447,6 +1495,11 @@ class Host : Services
         case PointerKind.enter:
         case PointerKind.leave:
             pointerIn = true;
+            Point moved = p - longFrom.pos;
+            if (longArmed && max(abs(moved.x), abs(moved.y)) >= tree.style!ScrollStyle().dragStart)
+            {
+                longArmed = false;
+            }
             pointerMoved();
             break;
         case PointerKind.down:

@@ -256,6 +256,14 @@ private accesskit_node* nodeOf(ref const AccessNode n)
     {
         accesskit_node_add_action(k, ACCESSKIT_ACTION_SCROLL_INTO_VIEW);
     }
+    if (n.labelledBy != 0)
+    {
+        accesskit_node_push_labelled_by(k, n.labelledBy);
+    }
+    if (a.live != Live.off)
+    {
+        accesskit_node_set_live(k, a.live == Live.assertive ? ACCESSKIT_LIVE_ASSERTIVE : ACCESSKIT_LIVE_POLITE);
+    }
     if (a.toggled != Toggle.none)
     {
         accesskit_node_set_toggled(k, a.toggled == Toggle.on ? ACCESSKIT_TOGGLED_TRUE

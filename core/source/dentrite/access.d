@@ -58,6 +58,14 @@ enum Role : ubyte
     image,              /// picture or icon
 }
 
+/// How screen readers announce changes to a node's text.
+enum Live : ubyte
+{
+    off,       /// not announced
+    polite,    /// announced once the reader is idle
+    assertive, /// announced at once, interrupting, for urgent alerts
+}
+
 /// State of a check box or toggle.
 enum Toggle : ubyte
 {
@@ -122,6 +130,7 @@ struct AccessInfo
     uint setSize;       /// items in its set, 0 for none
     size_t caret = size_t.max;  /// text fields: caret as a byte offset into `value`, `size_t.max` for none
     size_t anchor = size_t.max; /// text fields: other end of the selection, the caret when nothing is selected
+    Live live;          /// how changes are announced
     ushort actions;     /// supported actions, one bit per `AccessAction` value
 
     /// Adds `a` to the supported actions.
@@ -164,11 +173,13 @@ struct AccessNode
     AccessInfo info;  /// what the node exposes
     Rect bounds;      /// bounds in window coordinates, logical pixels
     ulong[] children; /// exposed children in order
+    ulong labelledBy; /// id of the exposed node naming it, 0 for none
 
-    /// Same description, bounds and children.
+    /// Same description, bounds, children and label.
     bool opEquals(ref const AccessNode o) const
     {
-        return id == o.id && info == o.info && bounds == o.bounds && children == o.children;
+        return id == o.id && info == o.info && bounds == o.bounds && children == o.children
+            && labelledBy == o.labelledBy;
     }
 }
 
@@ -236,6 +247,13 @@ interface AccessParts
     ptrdiff_t accessFocusPart();                                /// item with the node's focus, or -1
 }
 
+/// Node exposing some children inside a node of their own, such as a dock view naming each pane by its tab.
+interface AccessFrames
+{
+    /// Fills `a` and `r` for the node around child `c`, false to expose `c` alone. `r` starts as `c`'s bounds.
+    bool accessFrame(Node c, ref AccessInfo a, ref Rect r);
+}
+
 /// Id of the window node.
 enum ulong accessRootId = 1;
 
@@ -276,6 +294,13 @@ final class AccessTree
         parts = null;
         collect(t.root, root.children, now, byId, by, null, false);
         now[root.id] = root;
+        foreach (ref AccessNode n; now)
+        {
+            if (n.labelledBy != 0 && (n.labelledBy in now) is null)
+            {
+                n.labelledBy = 0;
+            }
+        }
         AccessUpdate u;
         u.root = accessRootId;
         u.full = full;
@@ -366,68 +391,96 @@ final class AccessTree
         {
             owner = h;
         }
+        AccessFrames frames = cast(AccessFrames) n;
         foreach (Node c; kids)
         {
-            AccessInfo a;
-            c.describe(a);
-            if (a.hidden)
+            AccessNode fn;
+            fn.bounds = c.bounds;
+            if (frames is null || frames.accessFrame(c, fn.info, fn.bounds) == false)
             {
+                visit(c, into, now, byId, by, owner, menu);
                 continue;
             }
-            if (a.role == Role.none)
+            fn.id = frameId(accessIdOf(c));
+            visit(c, fn.children, now, byId, by, owner, menu);
+            into ~= fn.id;
+            now[fn.id] = fn;
+            byId[fn.id] = n;
+        }
+    }
+
+    /// Adds `c` to `into` when exposed, else its exposed descendants, as `collect` does for each child.
+    private void visit(Node c, ref ulong[] into, ref AccessNode[ulong] now, ref Node[ulong] byId,
+        ref AccessActions[ulong] by, AccessActions owner, bool menu)
+    {
+        AccessInfo a;
+        c.describe(a);
+        if (a.hidden)
+        {
+            return;
+        }
+        if (a.role == Role.none)
+        {
+            collect(c, into, now, byId, by, owner, menu);
+            return;
+        }
+        if (c.accessName !is null)
+        {
+            a.label = c.accessName;
+        }
+        else if (c.labelledBy !is null)
+        {
+            a.label = nameOf(c.labelledBy);
+        }
+        if (c.accessLive != Live.off)
+        {
+            a.live = c.accessLive;
+        }
+        if (a.label.length == 0 && a.role != Role.label)
+        {
+            a.label = c.tooltip;
+        }
+        else if (a.description.length == 0)
+        {
+            a.description = c.tooltip;
+        }
+        if (c.focusable && a.disabled == false)
+        {
+            a.allow(AccessAction.focus);
+        }
+        if ((menu || c.hasContextMenu) && a.disabled == false)
+        {
+            a.allow(AccessAction.showContextMenu);
+        }
+        AccessNode an;
+        an.id = accessIdOf(c);
+        an.info = a;
+        an.bounds = c.bounds;
+        an.labelledBy = c.labelledBy is null ? 0 : accessIdOf(c.labelledBy);
+        if (a.leaf == false)
+        {
+            collect(c, an.children, now, byId, by, owner, menu);
+        }
+        if (AccessParts p = cast(AccessParts) c)
+        {
+            foreach (size_t i; 0 .. p.accessPartCount())
             {
-                collect(c, into, now, byId, by, owner, menu);
-                continue;
+                AccessNode pn;
+                pn.id = partId(an.id, i);
+                pn.bounds = an.bounds;
+                p.describePart(i, pn.info, pn.bounds);
+                an.children ~= pn.id;
+                now[pn.id] = pn;
+                byId[pn.id] = c;
+                parts[pn.id] = i;
             }
-            if (c.accessName !is null)
-            {
-                a.label = c.accessName;
-            }
-            if (a.label.length == 0 && a.role != Role.label)
-            {
-                a.label = c.tooltip;
-            }
-            else if (a.description.length == 0)
-            {
-                a.description = c.tooltip;
-            }
-            if (c.focusable && a.disabled == false)
-            {
-                a.allow(AccessAction.focus);
-            }
-            if ((menu || c.hasContextMenu) && a.disabled == false)
-            {
-                a.allow(AccessAction.showContextMenu);
-            }
-            AccessNode an;
-            an.id = accessIdOf(c);
-            an.info = a;
-            an.bounds = c.bounds;
-            if (a.leaf == false)
-            {
-                collect(c, an.children, now, byId, by, owner, menu);
-            }
-            if (AccessParts p = cast(AccessParts) c)
-            {
-                foreach (size_t i; 0 .. p.accessPartCount())
-                {
-                    AccessNode pn;
-                    pn.id = partId(an.id, i);
-                    pn.bounds = an.bounds;
-                    p.describePart(i, pn.info, pn.bounds);
-                    an.children ~= pn.id;
-                    now[pn.id] = pn;
-                    byId[pn.id] = c;
-                    parts[pn.id] = i;
-                }
-            }
-            into ~= an.id;
-            now[an.id] = an;
-            byId[an.id] = c;
-            if (owner !is null)
-            {
-                by[an.id] = owner;
-            }
+        }
+        into ~= an.id;
+        now[an.id] = an;
+        byId[an.id] = c;
+        if (owner !is null)
+        {
+            by[an.id] = owner;
         }
     }
 
@@ -435,6 +488,12 @@ final class AccessTree
     private static ulong partId(ulong id, size_t i)
     {
         return (mixId(i, id) | 1UL << 62) & ~(1UL << 63);
+    }
+
+    /// Id of the node an `AccessFrames` node puts around the node with id `id`, among the part ids.
+    private static ulong frameId(ulong id)
+    {
+        return partId(id, size_t.max);
     }
 
     /// Id of the nearest exposed node at or above `focus`, asking `AccessFocus` and `AccessParts` nodes first.
@@ -464,6 +523,18 @@ final class AccessTree
         }
         return accessRootId;
     }
+}
+
+/// Name of `n` for the nodes it labels: its `accessName`, else what it describes.
+string nameOf(Node n)
+{
+    if (n.accessName !is null)
+    {
+        return n.accessName;
+    }
+    AccessInfo a;
+    n.describe(a);
+    return a.label;
 }
 
 /// Text of the labels under `n` in tree order, joined by `sep`, for rows named by their content.
@@ -594,4 +665,58 @@ string nodeText(Node n, string sep = " ")
     AccessInfo a;
     n.describe(a);
     return a.role == Role.label ? a.label : contentText(n, sep);
+}
+
+// A label names the control it is for, with a relation only while the label is exposed. A live label says how
+// its changes are announced, and dock panes are named by their tabs.
+unittest
+{
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.containers : column, row, sized;
+    import dentrite.dock : DockNode, DockSpace, DockView;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.host : Host;
+    import dentrite.platform : WindowOptions;
+    import dentrite.signals : Signal, signal;
+    import dentrite.widgets.button : button;
+    import dentrite.widgets.label : Label, label;
+    import dentrite.widgets.textbox : TextBox, textBox;
+
+    WindowOptions o;
+    o.accessibility = true;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    HeadlessPlatform p = new HeadlessPlatform(400, 300);
+    Host h = new Host(p, new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    p.listening = AccessDemand.full;
+    Signal!string name = signal("");
+    Signal!string status = signal("Idle");
+    TextBox box = textBox(name);
+    Label caption = label("File name", for_: box);
+    Label line = label(() => status.get, live: Live.polite);
+    Node[string] panes = ["log": button("Clear"), "watch": label("Empty")];
+    DockView dock = new DockView(new DockSpace(DockNode.split(false, DockNode.stack("log"),
+        DockNode.stack("watch"))), panes, ["log": "Log"]);
+    h.setRoot(column()(row()(caption, sized(w: 150)(box)), line, sized(h: 200)(dock)));
+    h.frame();
+
+    const(AccessNode)* field = h.access.find(Role.textInput, "File name");
+    assert(field !is null && field.labelledBy == caption.accessId);
+    assert(h.access.find(Role.label, "Idle").info.live == Live.polite);
+    const(AccessNode)* log = h.access.find(Role.pane, "Log");
+    const(AccessNode)* watch = h.access.find(Role.pane, "watch");
+    assert(log !is null && watch !is null, "named by the title, or the ID without one");
+    assert(log.children == [panes["log"].accessId] && log.bounds == panes["log"].bounds);
+
+    caption.setText("Path");
+    h.frame();
+    assert(h.access.find(Role.textInput, "Path") !is null, "follows the label");
+    caption.accessName = "Hidden";
+    caption.parent.setChildren([box.parent]);
+    h.frame();
+    field = h.access.find(Role.textInput, "Hidden");
+    assert(field !is null && field.labelledBy == 0, "no relation to a label that is gone");
 }

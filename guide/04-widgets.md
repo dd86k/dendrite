@@ -91,5 +91,8 @@ Some options are fixed when built. `textArea`'s `wrap`, `readOnly` and
 Widgets describe themselves to screen readers (enable with
 `WindowOptions.accessibility`). A widget is named by its caption. One
 without a caption, such as a text box, an icon button or a slider, needs an
-`accessName:`, as `exportForm` gives the name box. Every builder takes it. A label next to a
-control does not name it.
+`accessName:`, as `exportForm` gives the name box. Every builder takes it.
+A label names the control it is for: `label("Name", for_: box)`.
+`label(() => status.get, live: Live.polite)` makes screen readers announce
+its changes, for a status line. `Live.assertive` interrupts them, for
+urgent alerts. Dock panes are named by their tabs.

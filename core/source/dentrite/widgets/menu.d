@@ -2036,3 +2036,56 @@ unittest
     ContextMenu cm = cast(ContextMenu) rows[4];
     assert(cm.menu.isOpen, "menu key opens the selected row's menu");
 }
+
+// A touch press held still opens the context menu where it went down and cancels the button's press, and its
+// release runs nothing. One that moves, lifts early or comes from the mouse clicks as usual.
+unittest
+{
+    import core.time : msecs;
+    import dentrite.containers : column;
+    import dentrite.widgets.button : Button, button;
+
+    Host h = menuHost();
+    scope (exit)
+    {
+        h.close();
+    }
+    int copied;
+    int clicks;
+    Button target = button("Target", onClick: () { ++clicks; });
+    ContextMenu cm = contextMenu(menuItem("&Copy", () { ++copied; }))(target);
+    h.setRoot(column()(cm));
+    h.frame();
+    Menu m = cm.menu;
+    Point p = Point(target.bounds.x + 10, target.bounds.y + 5);
+    MonoTime t = MonoTime.currTime - 2000.msecs;
+    void touch(PointerKind k, Point at, int ms, PointerSource from = PointerSource.touch)
+    {
+        h.inject(k, at, 1, 1, 0, from, t + ms.msecs);
+    }
+
+    touch(PointerKind.down, p, 0);
+    assert(target.pressed);
+    h.frame();
+    assert(m.isOpen && m.popup.bounds.x == p.x && target.pressed == false, "opened, the press cancelled");
+    touch(PointerKind.up, p, 600);
+    h.frame();
+    assert(m.isOpen && clicks == 0 && copied == 0, "the release ran nothing");
+    m.close();
+    h.frame();
+
+    touch(PointerKind.down, p, 1000);
+    touch(PointerKind.move, Point(p.x + 20, p.y), 1010);
+    h.frame();
+    assert(m.isOpen == false, "moved");
+    touch(PointerKind.up, Point(p.x + 20, p.y), 1020);
+    assert(clicks == 1, "the moved press still clicks");
+    touch(PointerKind.down, p, 1100);
+    touch(PointerKind.up, p, 1200);
+    h.frame();
+    assert(m.isOpen == false && clicks == 2, "a tap clicks");
+    touch(PointerKind.down, p, 1300, PointerSource.mouse);
+    h.frame();
+    assert(m.isOpen == false, "not for the mouse");
+    touch(PointerKind.up, p, 1400, PointerSource.mouse);
+}

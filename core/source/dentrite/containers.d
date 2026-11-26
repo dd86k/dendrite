@@ -1006,6 +1006,7 @@ struct ScrollStyle
     float wheelStep = 48; /// distance per wheel notch
     float dragStart = 8;  /// distance a press moves before a drag scrolls, see `DragScroller`
     float pressDelay = 120; /// milliseconds a press in a view scrolled by dragging waits before reaching the control
+    float longPress = 500;  /// milliseconds a touch or pen press held still waits before opening a context menu
     float flingDecay = 325; /// milliseconds for a fling to slow to a third of its speed
     float flingMin = 50;  /// slowest fling, in logical pixels per second
 }

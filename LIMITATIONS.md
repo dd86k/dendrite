@@ -67,12 +67,13 @@ Known gaps, by area.
 
 ## Accessibility
 
-- A label next to a control does not name it, set `accessName` on uncaptioned
-  controls.
+- A label names a control only when linked by `label(..., for_: control)`.
+  Island labels cannot be linked or live. Over AT-SPI the control gets the
+  name but no labelled-by relation, which accesskit-c 0.23 does not map.
 - Text fields have no character bounds, screen readers cannot move the caret.
-- Dock panes are not named by their tabs.
+- Dock tab bars are not exposed: a screen reader reaches only the shown pane
+  of each stack.
 - Table cells are not exposed as cells.
-- No live regions.
 - Island text boxes take no `setValue`.
 - Only the Linux adapter has been run (AT-SPI). Windows and macOS follow
   accesskit-c's SDL example.
@@ -81,8 +82,8 @@ Known gaps, by area.
 
 - One pointer, from the mouse events SDL makes of touches and pens. No pinch
   zoom or other multi-touch gestures.
-- No long press: no context menus or text selection by touch. A drag on a
-  text area scrolls it.
+- No text selection by touch, a drag on a text area scrolls it. A long press
+  only opens context menus.
 - Drag scrolling covers scroll views, tables and text areas. Tab strips and
   island scroll areas take the wheel only.
 - No overscroll bounce. A drag goes to the innermost view that can scroll

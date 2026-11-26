@@ -207,21 +207,32 @@ final class Label : Node
     }
 }
 
-/// Fixed text.
+/// Fixed text. It names `for_` for screen readers, and `live` sets how they announce changes.
 Label label(string text, string variant = null, bool wrap = false, TextAlign align_ = TextAlign.start,
-    string tooltip = null)
+    string tooltip = null, Node for_ = null, Live live = Live.off)
 {
     Label l = new Label(text, variant, wrap, align_);
     l.setTooltip(tooltip);
+    l.accessLive = live;
+    if (for_ !is null)
+    {
+        for_.labelledBy = l;
+    }
     return l;
 }
 
 /// Text bound to `text`, re-read when the signals it reads change. The effect belongs to the current owner.
+/// `for_` and `live` as for fixed text, such as `label(() => status.get, live: Live.polite)` for a status line.
 Label label(string delegate() text, string variant = null, bool wrap = false,
-    TextAlign align_ = TextAlign.start, string tooltip = null)
+    TextAlign align_ = TextAlign.start, string tooltip = null, Node for_ = null, Live live = Live.off)
 {
     Label l = new Label(null, variant, wrap, align_);
     l.setTooltip(tooltip);
+    l.accessLive = live;
+    if (for_ !is null)
+    {
+        for_.labelledBy = l;
+    }
     effect(() { l.setText(text()); });
     return l;
 }
