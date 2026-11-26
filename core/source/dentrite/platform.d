@@ -12,7 +12,7 @@ import dentrite.draw : FrameMesh;
 import dentrite.geom;
 import dentrite.image : Image;
 import dentrite.node : CursorShape, PointerKind, PointerSource, ScrollDrag;
-import dentrite.text : FontKind, GlyphAtlas;
+import dentrite.text : FontFile, FontKind, GlyphAtlas;
 import dentrite.theme : Theme;
 
 /// Renderers a platform can set up.
@@ -35,7 +35,10 @@ struct WindowOptions
     double maxFps = 120;         /// frame rate cap, for when vsync does not limit it
     RendererKind renderer;       /// renderer drawing the frames
     string[FontKind.max + 1] fonts; /// font file for each `FontKind` slot
+    /// Font file bytes for each slot, such as from `import("Inter.otf")`, used over `fonts` where not empty.
+    immutable(ubyte)[][FontKind.max + 1] fontData;
     string[] fallbackFonts;      /// files for characters the slot fonts lack, tried in order
+    FontFile[] fallbackFontData; /// fallback fonts tried before `fallbackFonts`, by path or bytes
     bool systemFallbacks = true; /// after `fallbackFonts`, try well-known system fonts, see `systemFallbackFonts`
     string themePath;            /// theme file, reloadable with Ctrl+R
     /// Validates every style the app reads, throws on errors. By default checks `LibraryStyles` only, so app
@@ -84,6 +87,8 @@ enum EventKind
     dismissed,   /// the system closed popup window `surface`, such as on a press outside the app
     hidden,      /// window hidden or minimized, `Host.run` draws no frames until it shows
     shown,       /// window shown or restored
+    fileDrop,    /// files dropped on the window
+    colorScheme, /// the system switched between light and dark, see `Appearance`
 }
 
 /// Input or window event from a platform. A field doc starting with an event kind, such as `pointer:`, says which
@@ -93,7 +98,7 @@ struct Event
     EventKind kind;      /// kind of event
     uint surface;        /// popup window the event came from, see `PopupWindow.id`, 0 for the main window
     PointerKind pointer; /// `pointer`: move, down or up
-    Point pos;           /// `pointer` and `wheel`: position in physical pixels within `surface`
+    Point pos;           /// `pointer`, `wheel` and `fileDrop`: position in physical pixels within `surface`
     ubyte button;        /// `pointer`: 1 left, 2 middle, 3 right
     ubyte clicks;        /// `pointer`: 2 for a double click
     ubyte mods;          /// `Mod` flags, combined with `|`
@@ -104,6 +109,7 @@ struct Event
     uint key;            /// `key`: Key value or another key code
     bool repeat;         /// `key`: auto-repeat
     string text;         /// `text` and `compose`: UTF-8
+    string[] paths;      /// `fileDrop`: the dropped files
     int start = -1;      /// `compose`: first code point the input method is converting, or the caret, -1 if unset
     int length = -1;     /// `compose`: code points it is converting, -1 or 0 for none
     void delegate() call; /// `call`: work for the UI thread
@@ -142,6 +148,20 @@ interface WindowControl
     bool visible();                    /// true unless hidden
     void setMinimumSize(int w, int h); /// smallest size the user can resize to, 0 for no limit
     void setIcon(Image[] icons);       /// sets the icon the window system shows, one image per size
+}
+
+/// Light or dark system appearance, from `Appearance`.
+enum ColorScheme
+{
+    unknown, /// the system does not say
+    light,   /// dark text on light backgrounds
+    dark,    /// light text on dark backgrounds
+}
+
+/// Platform that knows the system's light or dark appearance and sends `EventKind.colorScheme` when it changes.
+interface Appearance
+{
+    ColorScheme colorScheme(); /// current system appearance
 }
 
 /// Entry of a tray icon's menu.

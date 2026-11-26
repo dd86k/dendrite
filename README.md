@@ -5,6 +5,9 @@ Dentrite is a retained, signal-based UI library.
 Research exercise iterated over checking different patterns and existing
 libraries.
 
+> [!WARNING]
+> **WORK IN PROGRESS**: Under heavy development.
+
 Why:
 - ddui is immediate-mode only and less suited for a full GUI app.
 - Personal curiosity, learning modern UI architectures and syntax.

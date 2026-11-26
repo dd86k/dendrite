@@ -44,6 +44,8 @@ features = slashedZero | noContextual
 Ctrl+R reloads the theme file while the app runs, unless a focused node or
 a shortcut takes the key. A theme with an error is not loaded, and the
 error names the file and line.
+`w.setTheme(new Theme(text, name))` applies a theme built in code, checked
+the same way.
 
 ## Styles of your own
 

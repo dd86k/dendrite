@@ -40,7 +40,7 @@ struct TooltipStyle
 string commandTip(Command c)
 {
     string s = mnemonic(c.label).text;
-    string keys = c.keys.toString;
+    string keys = c.shortcut;
     return keys.length > 0 ? s ~ " (" ~ keys ~ ")" : s;
 }
 

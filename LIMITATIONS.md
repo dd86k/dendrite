@@ -24,6 +24,10 @@ Known gaps, by area.
   open the tray again. Linux needs an AppIndicator library and a desktop
   showing StatusNotifier items. Outside Windows the loop wakes every 50 ms
   while a tray shows, as SDL runs it only while pumping events.
+- File drops: the files and the drop point, once the drop ends. No dropped
+  text and nothing while a drag hovers, so no drop target highlight.
+- `Host.colorScheme` comes from SDL, `unknown` where it cannot tell, such as
+  on Linux without an XDG portal.
 - Tray submenus on SDL before 3.2.16 rely on a workaround that reads SDL's
   private menu struct, see `holdSubmenu` in `sdl3.d`.
 
@@ -62,6 +66,10 @@ Known gaps, by area.
   turns off is up to SDL and the platform. Where it stays on, the composition
   is hidden and only its commit lands. The text stays in memory as a plain
   string.
+- `Host.setFont` swaps slot fonts only, fallback fonts are fixed once the
+  window opens.
+- With `Host.onText` set and focus outside text fields, an input method's
+  composition shows nowhere, only its commit reaches the handler.
 - `ui.withStyle` edits do not reach island labels, which resolve their style
   at layout.
 
@@ -105,7 +113,9 @@ Known gaps, by area.
   whole text to the signal. Relayout shapes every line, fine for thousands of
   lines, not huge files.
 - Sliders: horizontal only, no tick marks.
-- Tab bars: no tab dragging.
+- Tab bars: no tab dragging, within a bar or between bars. Tabs show an icon,
+  a title and a close button, no marks such as a modified dot, a count,
+  progress or a lock.
 - Spin boxes: plain decimals only, no units, separators or hex.
 - Tooltips: text only.
 - Popups: a plain column stretches to the window width, give it a width.
@@ -122,3 +132,4 @@ Known gaps, by area.
 - Floating windows stay inside the main window.
 - No keyboard way to move panes.
 - Losing window focus mid-drag drops the tab.
+- Tabs show their title only, no icons or marks.

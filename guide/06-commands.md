@@ -52,11 +52,14 @@ Node editor(Host h, Notes n)
 
 ## Commands
 
-`command(label, action, keys:, icon:, enabled:, checked:)`:
+`command(label, action, keys:, icon:, enabled:, checked:, keysLabel:)`:
 
 - `&` in the label marks the mnemonic letter, `&&` is a literal `&`.
 - `keys:` is a chord such as `"Ctrl+S"`, `"Shift+Ctrl+Z"`, `"F5"` or
   `"Alt+Left"`.
+- `keysLabel:` is shortcut text shown in menus and tooltips in place of
+  `keys`. With no `keys`, the command fires on nothing, for keys the app
+  binds itself.
 - `enabled:` and `checked:` are delegates read where the command shows. A
   button bound with `enabled: &c.save.isEnabled` greys out with the
   command.
@@ -76,6 +79,10 @@ Where a shortcut fires depends on where its command sits:
 A key goes to the focused node first, then up its parents, then to the
 window-wide handlers. A text box keeps the keys it uses, such as Ctrl+A, and
 passes on the rest.
+
+Typed characters are text, not keys. `w.onText` gets the text the focused
+node does not take, such as `[` bound to an action, and keeps text input on
+while it is set.
 
 ## Menus
 

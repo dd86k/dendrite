@@ -339,7 +339,7 @@ private final class SdlPopup : PopupWindow
 }
 
 /// SDL3 window with a GL 3.3 context or a software surface.
-final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, Trays, PopupWindows
+final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, Trays, PopupWindows, Appearance
 {
     Renderer renderer;              /// renderer drawing into this window, created along with it
     /// Called with every SDL event on the UI thread, before the library handles it.
@@ -369,6 +369,8 @@ final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, T
     private ulong upAt;             /// SDL time stamp of the last key up
     private int imeRepeating;       /// scancode an input method repeats with its own presses, 0 for none
     private bool dropText;          /// the next text event belongs to a dropped key repeat
+    private bool dragging;          /// files are arriving between a drop's begin and complete
+    private Event dropped;          /// files of the drop arriving, as one `fileDrop` event
 
     /// Opens the window and sets up the renderer `o.renderer` names.
     this(WindowOptions o)
@@ -762,6 +764,11 @@ final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, T
             return s.button.windowID;
         case SDL_EventType.mouseWheel:
             return s.wheel.windowID;
+        case SDL_EventType.dropFile:
+        case SDL_EventType.dropText:
+        case SDL_EventType.dropBegin:
+        case SDL_EventType.dropComplete:
+            return s.drop.windowID;
         default:
             return s.type >= 0x200 && s.type < 0x300 ? s.window.windowID : 0;
         }
@@ -892,6 +899,31 @@ final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, T
             e.kind = EventKind.text;
             e.text = fromStringz(s.text.text).idup;
             break;
+        case SDL_EventType.dropBegin:
+            dragging = true;
+            dropped = Event(EventKind.fileDrop);
+            break;
+        case SDL_EventType.dropFile:
+            if (s.drop.data is null)
+            {
+                break;
+            }
+            dropped.kind = EventKind.fileDrop;
+            dropped.surface = e.surface;
+            dropped.pos = toPixels(s.drop.x, s.drop.y);
+            dropped.paths ~= fromStringz(s.drop.data).idup;
+            if (dragging == false)
+            {
+                e = takeDrop(); // a file the system opens with the app, with no begin
+            }
+            break;
+        case SDL_EventType.dropComplete:
+            dragging = false;
+            e = takeDrop();
+            break;
+        case SDL_EventType.systemThemeChanged:
+            e.kind = EventKind.colorScheme;
+            break;
         default:
             if (s.type == wakeEvent)
             {
@@ -912,6 +944,28 @@ final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, T
             break;
         }
         return e;
+    }
+
+    /// The files dropped so far as one `fileDrop` event, kind `none` if there are none. Clears them.
+    private Event takeDrop()
+    {
+        Event e = dropped.paths.length > 0 ? dropped : Event.init;
+        dropped = Event.init;
+        return e;
+    }
+
+    /// System light or dark appearance.
+    ColorScheme colorScheme()
+    {
+        switch (SDL_GetSystemTheme())
+        {
+        case 1:
+            return ColorScheme.light;
+        case 2:
+            return ColorScheme.dark;
+        default:
+            return ColorScheme.unknown;
+        }
     }
 
     /// Turns a press on the tray entry with `key` into a `call` event, none if its tray closed.

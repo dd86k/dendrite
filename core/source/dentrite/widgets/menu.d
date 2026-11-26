@@ -219,7 +219,7 @@ final class MenuItem : Node
     /// Shortcut text, empty for none.
     private string keysText()
     {
-        return command is null ? "" : command.keys.toString;
+        return command is null ? "" : command.shortcut;
     }
 
     /// Width the row needs and its height.
@@ -2088,4 +2088,28 @@ unittest
     h.frame();
     assert(m.isOpen == false, "not for the mouse");
     touch(PointerKind.up, p, 1400, PointerSource.mouse);
+}
+
+// A command with only `keysLabel` shows its shortcut in the menu and to screen readers, and the bar does not
+// fire it.
+unittest
+{
+    import dentrite.command : command;
+
+    Host h = menuHost();
+    scope (exit)
+    {
+        h.close();
+    }
+    int ran;
+    MenuItem prev = menuItem(command("&Previous", () { ++ran; }, keysLabel: "["));
+    MenuItem save = menuItem(command("&Save", () { ++ran; }, keys: "Ctrl+S", keysLabel: "Ctrl+S, F2"));
+    MenuBar bar = menuBar(menu("&Go")(prev, save));
+    h.setRoot(bar);
+    h.frame();
+    assert(prev.keysText == "[" && save.keysText == "Ctrl+S, F2");
+    h.injectKey('[');
+    assert(ran == 0, "a label alone binds nothing");
+    h.injectKey('s', Mod.ctrl);
+    assert(ran == 1, "keys still fire");
 }

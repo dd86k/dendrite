@@ -30,6 +30,23 @@ enum FontKind : ubyte
     mono,     /// fixed pitch, for addresses, bytes and code
 }
 
+/// Font file by path or by its bytes, such as `FontFile(data: import("Inter.otf"))`.
+struct FontFile
+{
+    string path;             /// file to open, when `data` is empty
+    immutable(ubyte)[] data; /// font file bytes, kept for the life of the text system
+
+    /// Opens it as `face`. False when FreeType cannot.
+    private bool open(FT_Library lib, out FT_Face face) const
+    {
+        if (data.length > 0)
+        {
+            return FT_New_Memory_Face(lib, data.ptr, cast(c_long) data.length, 0, &face) == 0;
+        }
+        return FT_New_Face(lib, path.toStringz, 0, &face) == 0;
+    }
+}
+
 /// OpenType features to shape with, combined with `|`. Each member names its tag. Color fonts shape without them.
 /// NOTE: `ccmp`, `kern` and the mark features stay on, text needs them.
 enum Features : ulong
@@ -458,7 +475,7 @@ final class TextSystem
 
     private FT_Library lib;                 /// FreeType library
     private immutable(ubyte)[][FontKind.max + 1] files; /// font file bytes per slot
-    private string[] fallbacks;             /// fallback font files, tried in order
+    private FontFile[] fallbacks;           /// fallback fonts, tried in order
     private bool[] badFallback;             /// fallbacks that did not open
     private SizedFont[] sized;              /// every sized font, by id
     private SizedFont[ulong] bySize;        /// sized fonts by slot and size
@@ -471,15 +488,29 @@ final class TextSystem
     /// Loads one font file per slot. `fallbacks` open when a character needs them, and bad ones are skipped.
     this(string[FontKind.max + 1] paths, string[] fallbacks = null)
     {
-        this.fallbacks = fallbacks.dup;
-        badFallback = new bool[fallbacks.length];
         import std.file : read;
 
-        enforce(FT_Init_FreeType(&lib) == 0, "FreeType init failed");
+        immutable(ubyte)[][FontKind.max + 1] slots;
         foreach (size_t i, string p; paths)
         {
-            files[i] = cast(immutable(ubyte)[]) read(p);
+            slots[i] = cast(immutable(ubyte)[]) read(p);
         }
+        FontFile[] more;
+        foreach (string p; fallbacks)
+        {
+            more ~= FontFile(p);
+        }
+        this(slots, more);
+    }
+
+    /// Takes the font file bytes of each slot. `fallbacks` open when a character needs them, and bad ones are
+    /// skipped.
+    this(immutable(ubyte)[][FontKind.max + 1] slots, FontFile[] fallbacks)
+    {
+        files = slots;
+        this.fallbacks = fallbacks.dup;
+        badFallback = new bool[fallbacks.length];
+        enforce(FT_Init_FreeType(&lib) == 0, "FreeType init failed");
         buffer = hb_buffer_create();
         atlas = new GlyphAtlas;
         setContrast(contrast);
@@ -512,6 +543,20 @@ final class TextSystem
             return;
         }
         ppp = scale;
+        dropFonts();
+        runs = null;
+        atlas.clear();
+    }
+
+    /// Replaces the font of slot `kind` with font file bytes `data`, throwing if FreeType cannot open them. Every
+    /// run and glyph is redone.
+    void setFont(FontKind kind, immutable(ubyte)[] data)
+    {
+        FT_Face test;
+        enforce(data.length > 0 && FT_New_Memory_Face(lib, data.ptr, cast(c_long) data.length, 0, &test) == 0,
+            "bad font file");
+        FT_Done_Face(test);
+        files[kind] = data;
         dropFonts();
         runs = null;
         atlas.clear();
@@ -565,7 +610,7 @@ final class TextSystem
             immutable(ubyte)[] data = files[file];
             enforce(FT_New_Memory_Face(lib, data.ptr, cast(c_long) data.length, 0, &f.face) == 0, "bad font file");
         }
-        else if (FT_New_Face(lib, fallbacks[file - FontKind.max - 1].toStringz, 0, &f.face) != 0)
+        else if (fallbacks[file - FontKind.max - 1].open(lib, f.face) == false)
         {
             return null;
         }
@@ -1217,4 +1262,28 @@ unittest
     assert(l[1].tag == hbTag("liga") && l[1].value == 0 && l[2].tag == hbTag("clig") && l[2].value == 0);
     assert(l[3].tag == hbTag("ss20") && l[3].value == 1 && l[3].end == uint.max);
     assert(hbFeatures(Features.none, buf).length == 0);
+}
+
+// Fonts load from bytes, fallbacks too, and swapping a slot font redoes its runs at the new font's widths.
+unittest
+{
+    import std.exception : assertThrown;
+    import std.file : read;
+
+    immutable(ubyte)[] inter = cast(immutable(ubyte)[]) read("fonts/Inter-Regular.otf");
+    immutable(ubyte)[] mono = cast(immutable(ubyte)[]) read("fonts/JetBrainsMono-Regular.ttf");
+    TextSystem t = new TextSystem([inter, inter, mono], [FontFile(data: inter)]);
+    scope (exit)
+    {
+        t.dispose();
+    }
+    ShapedRun greek = t.shape(FontKind.mono, 14, "aἀb");
+    assert(greek.glyphs[1] != 0 && greek.faces.length == 3, "the fallback from bytes has U+1F00");
+    float before = t.measure(FontKind.ui, 13, "illegal");
+    t.setFont(FontKind.ui, mono);
+    assert(t.cachedRuns == 0);
+    assert(t.measure(FontKind.ui, 13, "illegal") > before * 1.2, "mono is wider");
+    assertThrown(t.setFont(FontKind.ui, cast(immutable(ubyte)[]) "not a font"));
+    assertThrown(t.setFont(FontKind.ui, null));
+    assert(t.measure(FontKind.ui, 13, "illegal") > before * 1.2, "a bad font keeps the old one");
 }

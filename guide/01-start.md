@@ -50,6 +50,9 @@ What each part does:
   has Inter and JetBrains Mono with their licenses. Characters missing from
   them come from `fallbackFonts`, then from well-known system fonts. Emoji
   prefer a color font among those, such as Noto Color Emoji.
+  `fontData` and `fallbackFontData` take file bytes instead, such as from
+  `import("Inter.otf")`. `w.setFont(FontKind.ui, path)` swaps a font while
+  the app runs.
 - `scope Window w` opens the window and closes it at scope exit. One window
   per process for now.
 - The UI is built once, inside `effectScope`. Builders like `label` and
@@ -63,6 +66,9 @@ What each part does:
   it or ask about unsaved changes. It draws a frame only when something
   asked for one: input, a changed signal that a node shows, a timer, or a
   wake from another thread.
+- `w.onFileDrop` gets the files dropped on the window, and `w.colorScheme`
+  says whether the system is light or dark, rerunning effects that read it
+  when that changes.
 
 Without a theme every widget uses the dark look built into its style
 struct, variants included. Set `o.themePath` to a theme file to change it,

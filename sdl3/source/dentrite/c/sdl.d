@@ -66,6 +66,7 @@ enum int SDL_GL_CONTEXT_PROFILE_CORE = 1; /// core profile mask
 enum SDL_EventType : uint
 {
     quit = 0x100,
+    systemThemeChanged = 0x108,
     windowShown = 0x202,
     windowHidden = 0x203,
     windowExposed = 0x204,
@@ -88,6 +89,10 @@ enum SDL_EventType : uint
     mouseButtonDown = 0x401,
     mouseButtonUp = 0x402,
     mouseWheel = 0x403,
+    dropFile = 0x1000,
+    dropText = 0x1001,
+    dropBegin = 0x1002,
+    dropComplete = 0x1003,
     user = 0x8000,
 }
 
@@ -194,6 +199,19 @@ struct SDL_MouseWheelEvent
     float mouseY;    /// pointer position
 }
 
+/// Drag and drop.
+struct SDL_DropEvent
+{
+    uint type;           /// SDL_EventType
+    uint reserved;       /// unused
+    ulong timestamp;     /// nanoseconds
+    uint windowID;       /// window dropped on
+    float x;             /// window coordinates, unset on begin
+    float y;             /// window coordinates, unset on begin
+    const(char)* source; /// app the drop came from, or null
+    const(char)* data;   /// file name or text, owned by SDL, null on begin and complete
+}
+
 /// Application event.
 struct SDL_UserEvent
 {
@@ -218,6 +236,7 @@ union SDL_Event
     SDL_MouseMotionEvent motion;  /// pointer motion
     SDL_MouseButtonEvent button;  /// pointer buttons
     SDL_MouseWheelEvent wheel;    /// wheel
+    SDL_DropEvent drop;           /// drag and drop
     SDL_UserEvent user;           /// application events
     ubyte[128] padding;           /// full size
 }
@@ -228,6 +247,7 @@ version (D_LP64)
 {
     static assert(SDL_MouseButtonEvent.sizeof == 40);
     static assert(SDL_TextEditingEvent.sizeof == 40);
+    static assert(SDL_DropEvent.sizeof == 48);
 }
 else version (X86) version (linux)
 {
@@ -273,6 +293,7 @@ void SDL_DestroyWindow(SDL_Window* window);             /// closes a window
 bool SDL_ShowWindow(SDL_Window* window);                /// maps a hidden window
 bool SDL_HideWindow(SDL_Window* window);                /// unmaps a window
 ulong SDL_GetWindowFlags(SDL_Window* window);           /// SDL_WINDOW_* bits
+int SDL_GetSystemTheme();                                /// SDL_SYSTEM_THEME_*: 0 unknown, 1 light, 2 dark
 bool SDL_RestoreWindow(SDL_Window* window);             /// unminimizes
 bool SDL_RaiseWindow(SDL_Window* window);               /// brings to front and asks for focus
 bool SDL_SetWindowTitle(SDL_Window* window, const(char)* title); /// sets the title bar text

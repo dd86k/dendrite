@@ -112,6 +112,8 @@ class Host : Services
     void delegate()[] beforeFrame;
     /// Runs when the user asks to close the window, return false to keep it open. Null closes it.
     bool delegate() onCloseRequest;
+    /// Runs with the files dropped on the window and the drop point in logical pixels.
+    void delegate(string[] paths, Point at) onFileDrop;
     string screenshotPath; /// PNG file written after the next frame, then cleared
     Platform platform;    /// window system side, see `Platform`
     Renderer renderer;    /// renderer drawing the frames
@@ -158,6 +160,8 @@ class Host : Services
     private Shown[] shown;          /// popups in windows of their own, bottom first
     private uint pointerSurface;    /// surface of the last pointer event, 0 for the main window
     private Signal!Size sizeNow;    /// window size in logical pixels, for `windowSize`
+    private Signal!ColorScheme schemeNow; /// system appearance, for `colorScheme`
+    private void delegate(string) textHandler; /// see `onText`
 
     /// Takes over `p` and `r`, loads fonts and the theme.
     this(Platform p, Renderer r, WindowOptions o)
@@ -167,7 +171,7 @@ class Host : Services
         platform = p;
         renderer = r;
         opts = o;
-        text = new TextSystem(o.fonts, o.fallbackFonts ~ (o.systemFallbacks ? systemFallbackFonts() : null));
+        text = new TextSystem(fontBytes(o), fallbackFiles(o));
         if (o.themePath.length > 0)
         {
             theme = new Theme(readText(o.themePath), o.themePath);
@@ -191,7 +195,33 @@ class Host : Services
         clock = FrameClock(o.maxFps);
         hidden = o.hidden;
         sizeNow = signal(Size.init);
+        Appearance look = cast(Appearance) p;
+        schemeNow = signal(look is null ? ColorScheme.unknown : look.colorScheme());
         updateSize();
+    }
+
+    /// Font file bytes of each slot in `o`, read from `o.fonts` where `o.fontData` has none.
+    private static immutable(ubyte)[][FontKind.max + 1] fontBytes(ref const WindowOptions o)
+    {
+        import std.file : read;
+
+        immutable(ubyte)[][FontKind.max + 1] slots;
+        foreach (size_t i; 0 .. slots.length)
+        {
+            slots[i] = o.fontData[i].length > 0 ? o.fontData[i] : cast(immutable(ubyte)[]) read(o.fonts[i]);
+        }
+        return slots;
+    }
+
+    /// Fallback fonts of `o` in the order they are tried.
+    private static FontFile[] fallbackFiles(ref const WindowOptions o)
+    {
+        FontFile[] files = o.fallbackFontData.dup;
+        foreach (string p; o.fallbackFonts ~ (o.systemFallbacks ? systemFallbackFonts() : null))
+        {
+            files ~= FontFile(p);
+        }
+        return files;
     }
 
     /// Closes the window unless the GC is finalizing it, so `scope Window w = new Window(o)` cleans up.
@@ -321,8 +351,9 @@ class Host : Services
     /// Starts, stops or restarts platform text input to match the focused node, ending any composition.
     private void syncTextInput()
     {
-        bool want = focusNode !is null && focusNode.textInput;
-        bool hidden = want && focusNode.hiddenText;
+        bool field = focusNode !is null && focusNode.textInput;
+        bool want = field || textHandler !is null;
+        bool hidden = field && focusNode.hiddenText;
         if (want == textInputOn && hidden == textHiddenOn)
         {
             return;
@@ -846,9 +877,25 @@ class Host : Services
             break;
         case EventKind.text:
             composing = null;
-            if (focusNode !is null)
+            if ((focusNode is null || focusNode.onText(e.text) == false) && textHandler !is null
+                && tree.root.holdsKeys(focusNode) == false)
             {
-                focusNode.onText(e.text);
+                textHandler(e.text);
+            }
+            break;
+        case EventKind.fileDrop:
+            Point dropAt;
+            if (onFileDrop !is null && e.paths.length > 0 && fromSurface(e, dropAt))
+            {
+                onFileDrop(e.paths.dup, dropAt);
+                requestFrame();
+            }
+            break;
+        case EventKind.colorScheme:
+            if (Appearance look = cast(Appearance) platform)
+            {
+                schemeNow.set(look.colorScheme());
+                requestFrame();
             }
             break;
         case EventKind.compose:
@@ -1464,17 +1511,63 @@ class Host : Services
         }
         try
         {
-            Theme t = new Theme(readText(opts.themePath), opts.themePath);
-            check(t);
-            theme = t;
-            tree.theme = t;
-            tree.restyle();
+            setTheme(new Theme(readText(opts.themePath), opts.themePath));
             stderr.writeln("dentrite: reloaded ", opts.themePath);
         }
         catch (Exception ex)
         {
             stderr.writeln("dentrite: theme not reloaded: ", ex.msg);
         }
+    }
+
+    /// Checks theme `t` as a loaded one is checked and restyles every node with it. Throws on errors, keeping the
+    /// old theme. Ctrl+R still reloads `WindowOptions.themePath` over it.
+    void setTheme(Theme t)
+    {
+        check(t);
+        theme = t;
+        tree.theme = t;
+        tree.restyle();
+        requestFrame();
+    }
+
+    /// Replaces the font of slot `kind` with font file bytes `data` and lays every node out again. Throws if the
+    /// bytes are not a font, keeping the old one.
+    void setFont(FontKind kind, immutable(ubyte)[] data)
+    {
+        text.setFont(kind, data);
+        tree.restyle();
+        requestFrame();
+    }
+
+    /// Replaces the font of slot `kind` with font file `path`. Throws if it cannot be read or is not a font.
+    void setFont(FontKind kind, string path)
+    {
+        import std.file : read;
+
+        setFont(kind, cast(immutable(ubyte)[]) read(path));
+    }
+
+    /// System light or dark appearance, `unknown` when the platform does not say. Effects reading it rerun when
+    /// the system switches.
+    ColorScheme colorScheme()
+    {
+        return schemeNow.get;
+    }
+
+    /// Handler for typed text the focused node did not take, or null.
+    void delegate(string) onText()
+    {
+        return textHandler;
+    }
+
+    /// Sets a handler for typed text the focused node did not take, such as keys bound to characters, or null.
+    /// While set, platform text input stays on with focus outside text fields, which may show an on-screen
+    /// keyboard. Not called while a popup holds the keys.
+    void onText(void delegate(string) fn)
+    {
+        textHandler = fn;
+        syncTextInput();
     }
 
     /// Sets the platform cursor for `shape` if it changed.
@@ -2263,4 +2356,92 @@ unittest
     touch(PointerKind.move, 50, 40);
     touch(PointerKind.up, 50, 40);
     assert(inner.scrollY == 40 - 8 && outer.scrollY == 0);
+}
+
+// Drops reach `onFileDrop` in logical pixels, the color scheme follows the platform, and typed text nothing
+// focused took reaches `onText`, which keeps text input on.
+unittest
+{
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.signals : effect;
+    import dentrite.widgets.button : Button, button;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    HeadlessPlatform p = new HeadlessPlatform(200, 100, 2);
+    p.scheme = ColorScheme.light;
+    Host h = new Host(p, new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    Button b = button("Go", () {});
+    h.setRoot(b);
+    h.frame();
+
+    string[] dropped;
+    Point at;
+    h.onFileDrop = (string[] paths, Point p) { dropped = paths; at = p; };
+    Event drop = Event(EventKind.fileDrop);
+    drop.paths = ["/tmp/a.bin", "/tmp/b.bin"];
+    drop.pos = Point(40, 60);
+    h.handle(drop);
+    assert(dropped == ["/tmp/a.bin", "/tmp/b.bin"] && at == Point(20, 30));
+
+    ColorScheme seen;
+    effect(() { seen = h.colorScheme; });
+    assert(seen == ColorScheme.light);
+    p.scheme = ColorScheme.dark;
+    Event changed = Event(EventKind.colorScheme);
+    h.handle(changed);
+    assert(seen == ColorScheme.dark);
+
+    Event typed = Event(EventKind.text);
+    typed.text = "[";
+    h.handle(typed);
+    assert(p.textOn == false, "no text input without a handler");
+    string got;
+    h.onText = (string s) { got ~= s; };
+    assert(p.textOn);
+    h.handle(typed);
+    h.setFocus(b);
+    h.handle(typed);
+    assert(got == "[[", "with and without focus");
+    h.onText = null;
+    assert(p.textOn == false);
+}
+
+// `setTheme` restyles and refuses a theme that fails the check, `setFont` lays out at the new font's widths.
+unittest
+{
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.theme : Theme;
+    import dentrite.containers : row;
+    import dentrite.widgets.label : Label, label;
+    import std.exception : assertThrown;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    HeadlessPlatform p = new HeadlessPlatform(200, 100, 1);
+    Host h = new Host(p, new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    Label l = label("illegal");
+    h.setRoot(row()(l));
+    h.frame();
+    float before = l.bounds.w;
+    assertThrown(h.setTheme(new Theme("[window]\nnoSuchField = 1\n", "test")));
+    assert(h.theme is null);
+    h.setTheme(new Theme("[window]\nbackground = #ff0000\n", "test"));
+    h.frame();
+    assert(h.theme.style!WindowStyle("").background == Color(0xff, 0, 0, 0xff));
+
+    h.setFont(FontKind.ui, "fonts/JetBrainsMono-Regular.ttf");
+    h.frame();
+    assert(l.bounds.w > before * 1.2, "mono is wider");
+    assertThrown(h.setFont(FontKind.ui, "fonts/missing.ttf"));
 }

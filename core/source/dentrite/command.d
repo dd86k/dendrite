@@ -228,10 +228,17 @@ final class Command
 {
     string label;            /// menu text, `&` before the mnemonic letter and `&&` for a literal &
     Chord keys;              /// shortcut, `Chord.init` for none
+    string keysLabel;        /// shortcut text shown in place of `keys`, for keys the app handles itself
     Icon icon;               /// icon in menus
     void delegate() action;  /// runs when the command fires
     bool delegate() enabled; /// true when the command may run, null for always
     bool delegate() checked; /// true to show a check mark, null for none
+
+    /// Shortcut text for menus, tooltips and screen readers: `keysLabel`, else `keys`, empty for none.
+    string shortcut()
+    {
+        return keysLabel.length > 0 ? keysLabel : keys.toString;
+    }
 
     /// True if it can run.
     bool isEnabled()
@@ -257,14 +264,16 @@ final class Command
     }
 }
 
-/// New command, such as `command("&Save", &save, keys: "Ctrl+S", enabled: () => dirty.get)`.
+/// New command, such as `command("&Save", &save, keys: "Ctrl+S", enabled: () => dirty.get)`. `keysLabel`
+/// shows a shortcut that the command does not fire.
 Command command(string label, void delegate() action, string keys = null, Icon icon = Icon.none,
-    bool delegate() enabled = null, bool delegate() checked = null)
+    bool delegate() enabled = null, bool delegate() checked = null, string keysLabel = null)
 {
     Command c = new Command;
     c.label = label;
     c.action = action;
     c.keys = chord(keys);
+    c.keysLabel = keysLabel;
     c.icon = icon;
     c.enabled = enabled;
     c.checked = checked;
