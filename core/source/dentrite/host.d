@@ -343,6 +343,10 @@ class Host : Services
             n.focused = true;
             n.markNeedsPaint();
             n.onFocus(true);
+            for (Node a = n.parent; a !is null; a = a.parent)
+            {
+                a.onFocusWithin(n);
+            }
         }
         syncTextInput();
         requestFrame();

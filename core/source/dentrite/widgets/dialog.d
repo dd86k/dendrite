@@ -141,23 +141,6 @@ final class Dialog : Node
         }
     }
 
-    /// First Tab stop in `n`, or null.
-    private static Node firstStop(Node n)
-    {
-        if (n.tabStop)
-        {
-            return n;
-        }
-        foreach (Node c; n.children)
-        {
-            if (Node f = firstStop(c))
-            {
-                return f;
-            }
-        }
-        return null;
-    }
-
     /// Escape cancels and Enter presses the main button, when the focused node did not take them.
     override bool onKey(ref const KeyEvent e)
     {

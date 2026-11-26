@@ -282,23 +282,6 @@ void label(Ui ui, string text, string variant = null, bool wrap = false, TextAli
     }
 }
 
-/// First Tab stop at or under `n` in tree order, or null.
-private Node firstStop(Node n)
-{
-    if (n.tabStop)
-    {
-        return n;
-    }
-    foreach (Node c; n.children)
-    {
-        if (Node f = firstStop(c))
-        {
-            return f;
-        }
-    }
-    return null;
-}
-
 // Labels measure with real fonts, wrap to the width, and skip relayout when the width stays.
 unittest
 {

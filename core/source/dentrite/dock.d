@@ -9,6 +9,7 @@ module dentrite.dock;
 import dentrite.access : AccessPartTree;
 import dentrite.geom : Point, Rect;
 import dentrite.node;
+import dentrite.signals : Signal;
 import dentrite.text : FontKind, TextSystem;
 import std.algorithm.comparison : max, min;
 import std.algorithm.mutation : remove;
@@ -145,6 +146,31 @@ final class DockSpace
             walk(f.root);
         }
         return ids;
+    }
+
+    /// Every tab stack, main tree first.
+    DockNode[] stacks()
+    {
+        DockNode[] all;
+        void walk(DockNode n)
+        {
+            if (n.kind == Kind.tabs)
+            {
+                all ~= n;
+                return;
+            }
+            foreach (DockNode c; n.children)
+            {
+                walk(c);
+            }
+        }
+
+        walk(root);
+        foreach (ref Floating f; floating)
+        {
+            walk(f.root);
+        }
+        return all;
     }
 
     /// Index into `floating` of the window holding `n`, or -1 for the main tree.
@@ -414,6 +440,13 @@ final class DockSpace
         simplify();
     }
 
+    /// Removes `pane`, then simplifies. Its stack shows the tab that followed it, or the one before.
+    void remove(string pane)
+    {
+        detach(pane);
+        simplify();
+    }
+
     /// Removes `pane` from its stack, leaving the stack possibly empty.
     private void detach(string pane)
     {
@@ -422,7 +455,12 @@ final class DockSpace
         {
             return;
         }
-        s.panes = s.panes.remove(countUntil(s.panes, pane));
+        size_t i = countUntil(s.panes, pane);
+        s.panes = s.panes.remove(i);
+        if (i < s.active)
+        {
+            --s.active;
+        }
         s.active = s.panes.length == 0 ? 0 : min(s.active, s.panes.length - 1);
     }
 
@@ -703,6 +741,23 @@ unittest
     assert(r.root.kind == Kind.tabs && r.root.panes == ["a"] && r.root.active == 0);
 }
 
+// Removing a pane keeps the shown tab, or shows the next one, and lists the stacks.
+unittest
+{
+    DockSpace d = sample();
+    DockNode bw = d.find("watch");
+    d.move("source", bw, 2);
+    assert(bw.panes == ["breakpoints", "watch", "source"] && bw.active == 2);
+    d.remove("breakpoints");
+    assert(bw.panes == ["watch", "source"] && bw.active == 1, "still shows source");
+    d.remove("source");
+    assert(bw.panes == ["watch"] && bw.active == 0);
+    assert(d.stacks() == [bw, d.find("memory")]);
+    d.remove("watch");
+    d.remove("memory");
+    assert(d.root.kind == Kind.tabs && d.root.empty && d.stacks() == [d.root]);
+}
+
 /// Look of dock tab bars, splitters, floating windows and drop targets.
 struct DockStyle
 {
@@ -714,7 +769,8 @@ struct DockStyle
     Color tabActive = Color(0x1e, 0x1e, 0x22, 0xff);   /// selected tab, same as the pane
     Color text = Color(0x98, 0x98, 0xa0, 0xff);        /// tab title
     Color textActive = Color(0xee, 0xee, 0xee, 0xff);  /// selected tab title
-    Color accent = Color(0x4c, 0x8d, 0xf6, 0xff);      /// line on the selected tab, drop targets
+    Color accent = Color(0x4c, 0x8d, 0xf6, 0xff);      /// line on the focused stack's selected tab, drop targets
+    Color accentIdle;                                  /// line on the selected tab of other stacks
     Color splitter = Color(0x16, 0x16, 0x19, 0xff);    /// gap between panes
     Color splitterHover = Color(0x4c, 0x8d, 0xf6, 0xff); /// splitter under the pointer or dragged
     Color border = Color(0x33, 0x33, 0x38, 0xff);      /// line under the tab strip
@@ -831,6 +887,12 @@ final class DockView : Node, WindowKeys, AccessPartTree
     DockSpace space;       /// dock layout shown
     Node[string] panes;    /// pane content nodes by pane ID
     string[string] titles; /// tab titles by pane ID, the ID when missing
+    /// Shown pane of the focused stack, the one holding keyboard focus or pressed last, null when no pane shows.
+    /// Change it with `select`.
+    Signal!string current;
+    /// Runs after the user drops a tab, floats a pane, drags a splitter, or moves or resizes a floating window.
+    /// Not for method calls or tab choices, see `current` for those.
+    void delegate() onLayout;
 
     private DockHit hot;         /// under the pointer
     private Drag mode;           /// what the press drags
@@ -844,6 +906,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
     private DockNode guided;     /// stack whose drop buttons show
     private Point pointer;       /// last pointer position, local
     private AccessItem[] items;  /// items exposed to screen readers as of the last access update
+    private DockNode focus;      /// focused stack, see `current`
 
     /// Creates a view of `space` showing `panes`.
     this(DockSpace space, Node[string] panes, string[string] titles)
@@ -851,6 +914,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
         this.space = space;
         this.panes = panes;
         this.titles = titles;
+        current = new Signal!string(null);
         interactive = true;
         sync();
     }
@@ -884,12 +948,14 @@ final class DockView : Node, WindowKeys, AccessPartTree
             walk(f.root);
         }
         setChildren(shown);
+        refocus();
     }
 
     /// Shows `s` instead, dropping any drag.
     void setSpace(DockSpace s)
     {
         space = s;
+        focus = null;
         reset();
         sync();
     }
@@ -899,10 +965,163 @@ final class DockView : Node, WindowKeys, AccessPartTree
     {
         if (stack.active == index)
         {
+            refocus();
             return;
         }
         stack.active = index;
         sync();
+    }
+
+    /// Adds pane `id` showing `content` under `title`, as the chosen tab of a stack placed by `zone` against
+    /// `target`, the focused stack when null. A pane the space already holds, as from a restored layout, keeps its
+    /// place and becomes its stack's chosen tab.
+    void addPane(string id, Node content, string title, DockNode target = null, Zone zone = Zone.center)
+    {
+        panes[id] = content;
+        titles[id] = title;
+        if (DockNode s = space.find(id))
+        {
+            s.active = countUntil(s.panes, id);
+        }
+        else
+        {
+            if (target is null)
+            {
+                target = focus !is null ? focus : space.stacks()[0];
+            }
+            space.dock(id, target, zone == Zone.none ? Zone.center : zone);
+        }
+        sync();
+        markNeedsLayout();
+    }
+
+    /// Removes pane `id` with its content and title. Its stack shows the tab that followed, or the one before.
+    void removePane(string id)
+    {
+        if (mode != Drag.none)
+        {
+            reset();
+        }
+        space.remove(id);
+        panes.remove(id);
+        titles.remove(id);
+        sync();
+        markNeedsLayout();
+    }
+
+    /// Shows pane `id` and makes its stack the focused one. Keyboard focus moves to the pane's first Tab stop, or
+    /// is cleared when it was elsewhere in the view. Does nothing for a pane the space lacks.
+    void select(string id)
+    {
+        DockNode s = space.find(id);
+        if (s is null)
+        {
+            return;
+        }
+        s.active = countUntil(s.panes, id);
+        focus = s;
+        sync();
+        markNeedsLayout();
+        Node* p = id in panes;
+        if (p is null || tree is null || tree.services is null)
+        {
+            return;
+        }
+        if (Node f = firstStop(*p))
+        {
+            tree.services.setFocus(f);
+        }
+        else if (holds(tree.services.focused()))
+        {
+            tree.services.setFocus(null);
+        }
+    }
+
+    /// Replaces the tab title of pane `id`.
+    void setTitle(string id, string title)
+    {
+        titles[id] = title;
+        markNeedsLayout();
+    }
+
+    /// Focused stack, see `current`, or null when no pane shows.
+    DockNode focusedStack()
+    {
+        return focus;
+    }
+
+    /// Points `current` at the shown pane of the focused stack, or of the first stack with panes when the focused
+    /// one is gone.
+    private void refocus()
+    {
+        DockNode was = focus;
+        if (focus is null || focus.panes.length == 0 || placed(focus) == false)
+        {
+            focus = null;
+            foreach (DockNode s; space.stacks())
+            {
+                if (s.panes.length > 0)
+                {
+                    focus = s;
+                    break;
+                }
+            }
+        }
+        if (focus !is was)
+        {
+            markNeedsPaint();
+        }
+        current.set(focus is null ? null : focus.panes[focus.active]);
+    }
+
+    /// True if `stack` is in the main tree or a floating window.
+    private bool placed(DockNode stack)
+    {
+        DockNode r = stack;
+        while (r.parent !is null)
+        {
+            r = r.parent;
+        }
+        return r is space.root || windowFor(r) !is null;
+    }
+
+    /// True if `n` is inside the view.
+    private bool holds(Node n)
+    {
+        for (; n !is null; n = n.parent)
+        {
+            if (n is this)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Focus moving into a pane makes its stack the focused one.
+    override void onFocusWithin(Node n)
+    {
+        while (n !is null && n.parent !is this)
+        {
+            n = n.parent;
+        }
+        if (n is null)
+        {
+            return;
+        }
+        foreach (DockNode s; space.stacks())
+        {
+            if (s.panes.length > 0)
+            {
+                Node* p = s.panes[s.active] in panes;
+                if (p !is null && *p is n)
+                {
+                    focus = s;
+                    refocus();
+                    return;
+                }
+            }
+        }
     }
 
     /// Listens for Escape during drags.
@@ -1035,6 +1254,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
         {
             return false;
         }
+        focus = it.stack;
         activate(it.stack, it.tab);
         markNeedsLayout();
         return true;
@@ -1050,7 +1270,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
     private string titleOf(string id)
     {
         string* t = id in titles;
-        return t is null ? id : *t;
+        return t is null || *t is null ? id : *t;
     }
 
     /// Area under the tab bar of `stack`, local coordinates.
@@ -1187,7 +1407,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
                 if (active)
                 {
                     ctx.list.rect(tr, s.tabActive);
-                    ctx.list.rect(Rect(tr.x, tr.y, tr.w, 2), s.accent);
+                    ctx.list.rect(Rect(tr.x, tr.y, tr.w, 2), n is focus ? s.accent : s.accentIdle);
                 }
                 else if (hot.kind == DockHit.Kind.tab && hot.node is n && hot.index == i)
                 {
@@ -1546,9 +1766,15 @@ final class DockView : Node, WindowKeys, AccessPartTree
         }
     }
 
-    /// Raises the floating window under a press at window point `p`, its content included.
+    /// Makes the stack under a press at window point `p` the focused one and raises the floating window there.
     override void onPressInside(Point p)
     {
+        DockHit h = hitAt(p - bounds.pos);
+        if (h.kind == DockHit.Kind.tab || h.kind == DockHit.Kind.bar || h.kind == DockHit.Kind.content)
+        {
+            focus = h.node;
+            refocus();
+        }
         raiseAt(p - bounds.pos);
     }
 
@@ -1697,15 +1923,19 @@ final class DockView : Node, WindowKeys, AccessPartTree
         markNeedsLayout();
     }
 
-    /// Ends the drag: docks or floats the dragged pane, or keeps a moved or resized window inside the view.
+    /// Ends the drag: docks or floats the dragged pane, which becomes focused, or keeps a moved or resized window
+    /// inside the view. Runs `onLayout` if anything changed.
     private void finish()
     {
         Rect view = Rect(0, 0, size.w, size.h);
+        bool changed;
         final switch (mode)
         {
         case Drag.none:
         case Drag.pending:
+            break;
         case Drag.splitter:
+            changed = grab.node.shares != dragShares;
             break;
         case Drag.tab:
             if (drop.kind == Drop.Kind.none)
@@ -1716,23 +1946,32 @@ final class DockView : Node, WindowKeys, AccessPartTree
             {
                 land(moving, drop);
             }
+            focus = space.find(moving);
             sync();
+            changed = true;
             break;
         case Drag.window:
         case Drag.resize:
             if (mode == Drag.window && moving !is null && drop.kind != Drop.Kind.none)
             {
                 land(moving, drop);
+                focus = space.find(moving);
                 sync();
+                changed = true;
             }
             else if (Floating* f = windowFor(grabWindow))
             {
                 f.rect = DockSpace.keepIn(f.rect, view);
+                changed = f.rect != grabRect;
             }
             markNeedsLayout();
             break;
         }
         reset();
+        if (changed && onLayout !is null)
+        {
+            onLayout();
+        }
     }
 
     /// Docks `pane` at target `d`.
@@ -2109,4 +2348,123 @@ unittest
     f.to(Point(200, 400));
     assert(f.v.guided is null && f.v.drop.kind == Drop.Kind.none, "off the buttons, over its own stack");
     f.end();
+}
+
+// Panes added, selected, retitled and removed through the view, and `current` following the focused stack.
+unittest
+{
+    DockFixture f = DockFixture.make();
+    scope (exit)
+    {
+        f.dispose();
+    }
+    string[] seen;
+    import dentrite.signals : effect;
+
+    effect(() { seen ~= f.v.current.get; });
+    assert(f.v.current.get == "source" && f.v.focusedStack is f.v.space.find("source"), "first stack at the start");
+
+    Fixed log = new Fixed(Size.init);
+    f.v.addPane("log", log, "Log");
+    f.t.flush();
+    assert(f.v.space.find("source").panes == ["source", "log"] && f.v.current.get == "log");
+    assert(log.bounds == Rect(0, 24, 500, 580) && f.nodes["source"].tree is null);
+
+    Fixed calls = new Fixed(Size.init);
+    f.v.addPane("calls", calls, "Calls", f.v.space.find("memory"), Zone.bottom);
+    f.t.flush();
+    assert(f.v.space.find("calls").parent is f.v.space.find("memory").parent && f.v.current.get == "log",
+        "another stack, focus stays");
+
+    f.v.select("watch");
+    assert(f.v.focusedStack is f.v.space.find("watch") && f.v.current.get == "watch");
+    f.v.setTitle("watch", "Watches");
+    assert(f.v.titleOf("watch") == "Watches");
+
+    f.v.removePane("watch");
+    assert(f.v.current.get == "breakpoints" && ("watch" in f.v.panes) is null && ("watch" in f.v.titles) is null);
+    f.v.removePane("breakpoints");
+    assert(f.v.current.get == "log", "focused stack gone, first stack with panes");
+    assert(seen == ["source", "log", "watch", "breakpoints", "log"]);
+
+    f.v.addPane("source", f.nodes["source"], "Source");
+    assert(f.v.space.find("source").panes == ["source", "log"] && f.v.current.get == "source",
+        "a held pane keeps its place and shows");
+}
+
+// Presses and drops move the focused stack, `onLayout` runs once per change made by dragging.
+unittest
+{
+    DockFixture f = DockFixture.make();
+    scope (exit)
+    {
+        f.dispose();
+    }
+    int layouts;
+    f.v.onLayout = () { ++layouts; };
+
+    Point p = f.tab("watch", 1);
+    f.v.onPressInside(p);
+    f.send(PointerKind.down, p);
+    f.end();
+    assert(f.v.current.get == "watch" && layouts == 0, "a tab choice is no layout change");
+    f.v.onPressInside(Point(700, 450));
+    assert(f.v.current.get == "memory", "press on content");
+
+    f.send(PointerKind.down, Point(502, 300));
+    f.send(PointerKind.move, Point(602, 300));
+    f.end();
+    assert(layouts == 1);
+    f.send(PointerKind.down, Point(602, 300));
+    f.end();
+    assert(layouts == 1, "splitter pressed but not moved");
+    f.send(PointerKind.down, Point(602, 300));
+    f.send(PointerKind.move, Point(652, 300));
+    f.escape();
+    f.end();
+    assert(layouts == 1, "cancelled");
+
+    f.begin(f.tab("source", 0));
+    f.to(f.guide("memory", Zone.center));
+    f.end();
+    assert(layouts == 2 && f.v.current.get == "source" && f.v.focusedStack is f.v.space.find("memory"),
+        "the dropped pane is focused");
+}
+
+// Keyboard focus moving into a pane focuses its stack, and `select` moves keyboard focus into the pane.
+unittest
+{
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.host : Host;
+    import dentrite.platform : WindowOptions;
+    import dentrite.widgets.button : button;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    Host h = new Host(new HeadlessPlatform(1004, 604), new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    Node[string] ps;
+    foreach (string id; ["source", "breakpoints", "watch"])
+    {
+        ps[id] = button(id);
+    }
+    ps["memory"] = new Fixed(Size.init);
+    DockView v = new DockView(sample(), ps, null);
+    h.setRoot(v);
+    h.frame();
+    assert(v.current.get == "source");
+    h.setFocus(ps["breakpoints"]);
+    assert(v.current.get == "breakpoints");
+
+    v.select("source");
+    assert(h.focused is ps["source"] && v.current.get == "source");
+    v.select("memory");
+    assert(h.focused is null && v.current.get == "memory", "no Tab stop, focus cleared");
+    v.select("watch");
+    h.frame();
+    assert(h.focused is ps["watch"] && ps["breakpoints"].tree is null);
 }

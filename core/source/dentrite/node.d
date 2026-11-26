@@ -133,6 +133,23 @@ bool scrollsWith(ScrollDrag mode, PointerSource source)
     }
 }
 
+/// First Tab stop at or under `n` in tree order, or null.
+Node firstStop(Node n)
+{
+    if (n.tabStop)
+    {
+        return n;
+    }
+    foreach (Node c; n.children)
+    {
+        if (Node f = firstStop(c))
+        {
+            return f;
+        }
+    }
+    return null;
+}
+
 /// Node scrolled by dragging its content, such as a scroll view on a touch screen. The window holds back a press
 /// inside one until the pointer moves, lifts or `ScrollStyle.pressDelay` passes, so a swipe never presses a control.
 /// Once the pointer moves `ScrollStyle.dragStart`, the innermost one that can scroll that way takes the drag.
@@ -1022,6 +1039,11 @@ abstract class Node
 
     /// Called when the node gains or loses keyboard focus.
     void onFocus(bool gained)
+    {
+    }
+
+    /// Called on the ancestors of `n`, innermost first, when `n` gains keyboard focus.
+    void onFocusWithin(Node n)
     {
     }
 
