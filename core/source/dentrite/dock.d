@@ -11,6 +11,7 @@ import dentrite.geom : Point, Rect;
 import dentrite.node;
 import dentrite.signals : Signal;
 import dentrite.text : FontKind, TextSystem;
+import dentrite.widgets.icons : Icon, paintIcon;
 import std.algorithm.comparison : max, min;
 import std.algorithm.mutation : remove;
 import std.algorithm.searching : countUntil;
@@ -779,7 +780,10 @@ struct DockStyle
     Color drop = Color(0x4c, 0x8d, 0xf6, 0x40);        /// area a drop would fill
     Color guide = Color(0x2c, 0x2c, 0x31, 0xf0);       /// drop button fill
     Color guideBorder = Color(0x55, 0x55, 0x5c, 0xff); /// drop button outline
+    Color closeHover = Color(0xff, 0xff, 0xff, 0x1a);  /// close button under the pointer
     float tabPadX = 12;    /// space between a tab title and the sides of its tab
+    float closeSize = 8;   /// close icon size
+    float closeGap = 8;    /// space between a tab title and its close icon
     float guideSize = 32;  /// side length of a drop button
     float shadowBlur = 12; /// floating window shadow size
     FontKind font = FontKind.ui; /// title font
@@ -793,6 +797,7 @@ private struct DockHit
     {
         none,     /// nothing
         tab,      /// a tab title
+        close,    /// a tab's close button
         bar,      /// the empty part of a tab bar
         splitter, /// a gap between split children
         edge,     /// the border of a floating window
@@ -800,7 +805,7 @@ private struct DockHit
     }
 
     Kind kind;      /// what was hit
-    DockNode node;  /// stack for a tab, bar or content, split for a splitter, window root for an edge
+    DockNode node;  /// stack for a tab, close button, bar or content, split for a splitter, window root for an edge
     size_t index;   /// tab index, the child before the splitter, or `Edge` bits
 }
 
@@ -893,6 +898,11 @@ final class DockView : Node, WindowKeys, AccessPartTree
     /// Runs after the user drops a tab, floats a pane, drags a splitter, or moves or resizes a floating window.
     /// Not for method calls or tab choices, see `current` for those.
     void delegate() onLayout;
+    /// Runs when the user asks to close a pane, by its close button or a middle click on its tab. Removing it is
+    /// up to the app, through `removePane`, at once or after asking about unsaved changes. Null for no close
+    /// buttons.
+    void delegate(string pane) onCloseRequest;
+    bool delegate(string pane) closable; /// whether a pane can be closed, null for all
 
     private DockHit hot;         /// under the pointer
     private Drag mode;           /// what the press drags
@@ -907,6 +917,9 @@ final class DockView : Node, WindowKeys, AccessPartTree
     private Point pointer;       /// last pointer position, local
     private AccessItem[] items;  /// items exposed to screen readers as of the last access update
     private DockNode focus;      /// focused stack, see `current`
+    private DockHit closing;     /// tab whose close button or middle button is pressed, `Kind.none` for none
+    private ubyte closingButton; /// button pressed on `closing`
+    private string closingPane;  /// pane of `closing`
 
     /// Creates a view of `space` showing `panes`.
     this(DockSpace space, Node[string] panes, string[string] titles)
@@ -1022,6 +1035,12 @@ final class DockView : Node, WindowKeys, AccessPartTree
         focus = s;
         sync();
         markNeedsLayout();
+        focusInto(id);
+    }
+
+    /// Moves keyboard focus to the first Tab stop of pane `id`, or clears it when it was elsewhere in the view.
+    private void focusInto(string id)
+    {
         Node* p = id in panes;
         if (p is null || tree is null || tree.services is null)
         {
@@ -1287,11 +1306,25 @@ final class DockView : Node, WindowKeys, AccessPartTree
         float x = stack.rect.x;
         foreach (string p; stack.panes)
         {
-            float w = tree.text.measure(s.font, s.size, titleOf(p)) + s.tabPadX * 2;
+            float w = tree.text.measure(s.font, s.size, titleOf(p)) + s.tabPadX * 2
+                + (canClose(p) ? s.closeGap + s.closeSize : 0);
             rs ~= Rect(x, stack.rect.y, w, tabBarHeight);
             x += w;
         }
         return rs;
+    }
+
+    /// True if pane `id` shows a close button.
+    private bool canClose(string id)
+    {
+        return onCloseRequest !is null && (closable is null || closable(id));
+    }
+
+    /// Close button of tab rect `t`.
+    private static Rect closeRect(Rect t, const ref DockStyle s)
+    {
+        float c = s.closeSize;
+        return Rect(t.right - s.tabPadX - c, t.y + round((t.h - c) / 2), c, c);
     }
 
     /// Floating window rooted at `root`, or null.
@@ -1393,7 +1426,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
         }
     }
 
-    /// Tab bar of `n`.
+    /// Tab bar of `n`, close buttons on its chosen and hovered tabs.
     private void paintBar(ref PaintContext ctx, Point origin, DockNode n, const ref DockStyle s)
     {
         Rect bar = Rect(n.rect.x, n.rect.y, n.rect.w, tabBarHeight).translate(origin);
@@ -1409,11 +1442,23 @@ final class DockView : Node, WindowKeys, AccessPartTree
                     ctx.list.rect(tr, s.tabActive);
                     ctx.list.rect(Rect(tr.x, tr.y, tr.w, 2), n is focus ? s.accent : s.accentIdle);
                 }
-                else if (hot.kind == DockHit.Kind.tab && hot.node is n && hot.index == i)
+                bool over = (hot.kind == DockHit.Kind.tab || hot.kind == DockHit.Kind.close) && hot.node is n
+                    && hot.index == i;
+                if (active == false && over)
                 {
                     ctx.list.rect(Rect(tr.x, tr.y, tr.w, tr.h - 1), s.tabHover);
                 }
-                paintTitle(ctx, tr, n.panes[i], active ? s.textActive : s.text, s);
+                Color ink = active ? s.textActive : s.text;
+                paintTitle(ctx, tr, n.panes[i], ink, s);
+                if ((active || over) && canClose(n.panes[i]))
+                {
+                    Rect cr = closeRect(tr, s);
+                    if (over && hot.kind == DockHit.Kind.close)
+                    {
+                        ctx.list.rect(cr.inset(-3), s.closeHover, 3);
+                    }
+                    paintIcon(*ctx.list, Icon.close, cr, ink);
+                }
             }
         });
     }
@@ -1699,7 +1744,8 @@ final class DockView : Node, WindowKeys, AccessPartTree
         {
             if (t.contains(p))
             {
-                return DockHit(DockHit.Kind.tab, stack, i);
+                bool x = canClose(stack.panes[i]) && closeRect(t, s).inset(-3).contains(p);
+                return DockHit(x ? DockHit.Kind.close : DockHit.Kind.tab, stack, i);
             }
         }
         return DockHit(DockHit.Kind.bar, stack);
@@ -1729,7 +1775,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
         return this;
     }
 
-    /// Tab selection, hover, and the drags.
+    /// Tab selection, hover, close presses, and the drags.
     override bool onPointer(ref const PointerEvent e)
     {
         Point local = e.pos - bounds.pos;
@@ -1747,13 +1793,34 @@ final class DockView : Node, WindowKeys, AccessPartTree
             }
             return true;
         case PointerKind.down:
-            if (e.button == 1 && mode == Drag.none)
+            if (mode != Drag.none || closing.kind != DockHit.Kind.none)
+            {
+                return true;
+            }
+            DockHit h = hitAt(local);
+            if ((e.button == 1 && h.kind == DockHit.Kind.close)
+                || (e.button == 2 && (h.kind == DockHit.Kind.tab || h.kind == DockHit.Kind.close)
+                    && canClose(h.node.panes[h.index])))
+            {
+                closing = h;
+                closingButton = e.button;
+                closingPane = h.node.panes[h.index];
+            }
+            else if (e.button == 1)
             {
                 press(local);
                 updateCursor();
             }
             return true;
         case PointerKind.up:
+            if (closing.kind != DockHit.Kind.none)
+            {
+                if (e.button == closingButton)
+                {
+                    closeAt(local);
+                }
+                return true;
+            }
             if (e.button == 1)
             {
                 finish();
@@ -1761,8 +1828,27 @@ final class DockView : Node, WindowKeys, AccessPartTree
                 updateCursor();
             }
             return true;
+        case PointerKind.cancel:
+            closing = DockHit.init;
+            return true;
         default:
             return false;
+        }
+    }
+
+    /// Ends a close press with a release at local point `p`: on the pressed pane's close button, or its tab for the
+    /// middle button, it runs `onCloseRequest`.
+    private void closeAt(Point p)
+    {
+        closing = DockHit.init;
+        DockHit h = hitAt(p);
+        if (h.node is null || h.index >= h.node.panes.length || h.node.panes[h.index] != closingPane)
+        {
+            return;
+        }
+        if (h.kind == DockHit.Kind.close || (closingButton == 2 && h.kind == DockHit.Kind.tab))
+        {
+            onCloseRequest(closingPane);
         }
     }
 
@@ -1791,8 +1877,8 @@ final class DockView : Node, WindowKeys, AccessPartTree
         return w;
     }
 
-    /// Starts what a press at `p` grabs: a tab, selected at once, a floating window's bar or border, or a
-    /// splitter. A press in a floating window raises it.
+    /// Starts what a press at `p` grabs: a tab, selected at once with keyboard focus moved into its pane, a
+    /// floating window's bar or border, or a splitter. A press in a floating window raises it.
     private void press(Point p)
     {
         DockHit h = hitAt(p);
@@ -1802,10 +1888,12 @@ final class DockView : Node, WindowKeys, AccessPartTree
         final switch (h.kind)
         {
         case DockHit.Kind.none:
+        case DockHit.Kind.close:
         case DockHit.Kind.content:
             break;
         case DockHit.Kind.tab:
             activate(h.node, h.index);
+            focusInto(h.node.panes[h.index]);
             mode = Drag.pending;
             break;
         case DockHit.Kind.bar:
@@ -2431,7 +2519,7 @@ unittest
         "the dropped pane is focused");
 }
 
-// Keyboard focus moving into a pane focuses its stack, and `select` moves keyboard focus into the pane.
+// Keyboard focus moving into a pane focuses its stack, and `select` or a tab click moves keyboard focus into it.
 unittest
 {
     import dentrite.backend.software : SoftwareRenderer;
@@ -2467,4 +2555,65 @@ unittest
     v.select("watch");
     h.frame();
     assert(h.focused is ps["watch"] && ps["breakpoints"].tree is null);
+
+    DockStyle s = h.tree.style!DockStyle();
+    Rect r = v.tabRects(v.space.find("breakpoints"), s)[0];
+    Point p = Point(r.x + r.w / 2, r.y + r.h / 2);
+    h.inject(PointerKind.down, p);
+    h.inject(PointerKind.up, p);
+    h.frame();
+    assert(h.focused is ps["breakpoints"] && v.current.get == "breakpoints", "a tab click focuses its pane");
+}
+
+// Close buttons and middle clicks ask `onCloseRequest`, which may remove the pane or keep it.
+unittest
+{
+    DockFixture f = DockFixture.make();
+    scope (exit)
+    {
+        f.dispose();
+    }
+    DockStyle s = f.t.style!DockStyle();
+    DockNode bw = f.v.space.find("watch");
+    float plain = f.v.tabRects(bw, s)[1].w;
+    string[] asked;
+    f.v.onCloseRequest = (string p) { asked ~= p; };
+    f.v.closable = (string p) => p != "memory";
+    assert(f.v.tabRects(bw, s)[1].w == plain + s.closeGap + s.closeSize);
+    assert(f.v.tabRects(f.v.space.find("memory"), s)[0].w == f.v.tabRects(bw, s)[1].w - s.closeGap - s.closeSize
+        + f.t.text.measure(s.font, s.size, "memory") - f.t.text.measure(s.font, s.size, "watch"), "not closable");
+
+    Point x(string pane, size_t i)
+    {
+        Rect c = DockView.closeRect(f.v.tabRects(f.v.space.find(pane), s)[i], s);
+        return Point(c.x + c.w / 2, c.y + c.h / 2);
+    }
+
+    void middle(PointerKind k, Point p)
+    {
+        PointerEvent e = PointerEvent(k, p, 2);
+        f.v.onPointer(e);
+        f.t.flush();
+    }
+
+    f.send(PointerKind.down, x("breakpoints", 0));
+    f.send(PointerKind.move, Point(x("breakpoints", 0).x, 300));
+    assert(f.v.mode == Drag.none, "a close press does not drag");
+    f.end();
+    assert(asked.length == 0, "released off the button");
+    f.send(PointerKind.down, x("breakpoints", 0));
+    f.end();
+    assert(asked == ["breakpoints"] && bw.panes == ["breakpoints", "watch"], "only asked");
+
+    middle(PointerKind.down, f.tab("watch", 1));
+    middle(PointerKind.up, f.tab("watch", 1));
+    assert(asked == ["breakpoints", "watch"] && bw.active == 0, "middle click asks without choosing");
+    middle(PointerKind.down, f.tab("memory", 0));
+    middle(PointerKind.up, f.tab("memory", 0));
+    assert(asked.length == 2, "memory cannot close");
+
+    f.v.onCloseRequest = (string p) { f.v.removePane(p); };
+    f.send(PointerKind.down, x("breakpoints", 0));
+    f.end();
+    assert(bw.panes == ["watch"] && f.nodes["watch"].tree !is null);
 }

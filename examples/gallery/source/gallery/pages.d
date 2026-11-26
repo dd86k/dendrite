@@ -885,7 +885,10 @@ Node dockPage()
             ~ "anywhere else to float it. Escape cancels."),
         "output": dockPane("Output", "Floating windows move by their tab bar and resize by their border.")];
     string[string] titles = ["files": "Files", "search": "Search", "editor": "Editor", "output": "Output"];
-    return sized(h: 420)(new DockView(space, panes, titles));
+    DockView view = new DockView(space, panes, titles);
+    view.onCloseRequest = (string pane) { view.removePane(pane); };
+    view.closable = (string pane) => pane != "editor";
+    return sized(h: 420)(view);
 }
 
 /// Pane content for the dock page.

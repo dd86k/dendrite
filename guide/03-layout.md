@@ -236,8 +236,9 @@ a wider space, such as a form or long text in a wide window.
 The dock (`dentrite.dock`) arranges panes in tab stacks and splits that the
 user can drag, with floating windows and JSON save and restore. The view's
 `addPane`, `removePane`, `select` and `setTitle` change it from code,
-`current` holds the shown pane of the focused stack, and `onLayout` runs
-after the user rearranges it. See the gallery's Dock page and
+`current` holds the shown pane of the focused stack, `onLayout` runs after
+the user rearranges it, and `onCloseRequest` gets close button and middle
+click presses. See the gallery's Dock page and
 `examples/debugger/source/app.d`.
 
 For a layout none of these give, write a node (chapter 10): its

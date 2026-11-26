@@ -84,6 +84,7 @@ Known gaps, by area.
 - Table cells carry their row and column, but accesskit-c 0.23 has no AT-SPI
   table interface, so Orca reads them as plain cells.
 - Island text boxes take no `setValue` or `setSelection`.
+- Tab close buttons, in tab bars and the dock, are not exposed. Pair them with a close command.
 - Only the Linux adapter has been run (AT-SPI). Windows and macOS follow
   accesskit-c's SDL example.
 
