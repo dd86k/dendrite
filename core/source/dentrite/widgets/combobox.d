@@ -1525,7 +1525,8 @@ version (unittest)
         import dentrite.widgets.menu : menuHost;
 
         Host h = menuHost(400, 500);
-        h.tree.theme = new Theme("[menu]\nhoverDelay = 0\n[combobox]\ntypeAhead = 0\n[panel.popup]\nborderWidth = 0\npadX = 0\n", "test");
+        h.tree.theme = new Theme("[menu]\nhoverDelay = 0\n[combobox]\ntypeAhead = 0\n"
+            ~ "[panel.popup]\nborderWidth = 0\npadX = 0\n", "test");
         return h;
     }
 

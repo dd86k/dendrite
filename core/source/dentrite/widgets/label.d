@@ -1,7 +1,7 @@
 /// Text label: themed font and color, optional wrapping, bindable text.
 module dentrite.widgets.label;
 
-import dentrite.immediate : Ui;
+import dentrite.immediate : Id, Ui;
 import dentrite.node;
 import dentrite.signals : effect;
 import dentrite.text;
@@ -117,6 +117,7 @@ final class Label : Node
     string variant;     /// TextStyle variant
     bool wrap;          /// break lines to fit
     TextAlign align_;   /// placement in a wider box
+    Node target;        /// control it names, focused by a click, see `labels`
     private ShapedRun run;  /// shaped content
     private Line[] lines;   /// wrapped lines
 
@@ -127,6 +128,38 @@ final class Label : Node
         this.variant = variant;
         this.wrap = wrap;
         this.align_ = align_;
+    }
+
+    /// Names `n` for screen readers and focuses it on a click, or stops for null.
+    void labels(Node n)
+    {
+        if (target !is null && target.labelledBy is this)
+        {
+            target.labelledBy = null;
+        }
+        target = n;
+        interactive = n !is null;
+        if (n !is null)
+        {
+            n.labelledBy = this;
+        }
+    }
+
+    /// A left click focuses the first Tab stop in `target`.
+    override bool onPointer(ref const PointerEvent e)
+    {
+        if (target is null || e.button != 1)
+        {
+            return false;
+        }
+        if (e.kind == PointerKind.up && hovered && tree !is null && tree.services !is null)
+        {
+            if (Node f = firstStop(target))
+            {
+                tree.services.setFocus(f);
+            }
+        }
+        return e.kind == PointerKind.down || e.kind == PointerKind.up;
     }
 
     /// Static text.
@@ -214,10 +247,7 @@ Label label(string text, string variant = null, bool wrap = false, TextAlign ali
     Label l = new Label(text, variant, wrap, align_);
     l.setTooltip(tooltip);
     l.accessLive = live;
-    if (for_ !is null)
-    {
-        for_.labelledBy = l;
-    }
+    l.labels(for_);
     return l;
 }
 
@@ -229,18 +259,44 @@ Label label(string delegate() text, string variant = null, bool wrap = false,
     Label l = new Label(null, variant, wrap, align_);
     l.setTooltip(tooltip);
     l.accessLive = live;
-    if (for_ !is null)
-    {
-        for_.labelledBy = l;
-    }
+    l.labels(for_);
     effect(() { l.setText(text()); });
     return l;
 }
 
-/// Island label: the retained label node, declared fresh each pass.
-void label(Ui ui, string text, string variant = null, bool wrap = false, TextAlign align_ = TextAlign.start)
+/// Island label: the retained label node, declared fresh each pass. `forNext` names the next control for screen
+/// readers and lets a click focus it, `live` as for retained labels.
+void label(Ui ui, string text, string variant = null, bool wrap = false, TextAlign align_ = TextAlign.start,
+    bool forNext = false, Live live = Live.off, string file = __FILE__, size_t line = __LINE__)
 {
-    ui.put(new Label(text, variant, wrap, align_));
+    Label l = new Label(text, variant, wrap, align_);
+    l.accessLive = live;
+    ui.put(l);
+    if (forNext)
+    {
+        Id i = ui.id(file, line);
+        bool clicked = ui.clickable(i).clicked;
+        ui.labelNext(null, false);
+        ui.track(l, i);
+        ui.labelNext(l, clicked);
+    }
+}
+
+/// First Tab stop at or under `n` in tree order, or null.
+private Node firstStop(Node n)
+{
+    if (n.tabStop)
+    {
+        return n;
+    }
+    foreach (Node c; n.children)
+    {
+        if (Node f = firstStop(c))
+        {
+            return f;
+        }
+    }
+    return null;
 }
 
 // Labels measure with real fonts, wrap to the width, and skip relayout when the width stays.

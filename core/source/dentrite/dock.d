@@ -6,7 +6,7 @@
 /// IDs that the application maps to content.
 module dentrite.dock;
 
-import dentrite.access : AccessFrames;
+import dentrite.access : AccessPartTree;
 import dentrite.geom : Point, Rect;
 import dentrite.node;
 import dentrite.text : FontKind, TextSystem;
@@ -769,6 +769,15 @@ private enum Drag
 }
 
 /// Where a dragged pane would land.
+/// Item of a dock view exposed to screen readers: a stack's tab list, one of its tabs, or its shown pane.
+private struct AccessItem
+{
+    DockNode stack;   /// stack it belongs to
+    Role role;        /// `Role.tabList`, `Role.tab` or `Role.pane`
+    size_t tab;       /// index into the stack's panes, for a tab
+    ptrdiff_t parent; /// item holding it, the tab list for a tab, else -1
+}
+
 private struct Drop
 {
     enum Kind
@@ -817,7 +826,7 @@ private enum float edgeIn = 2;
 /// Dropping on a button docks the pane there, on a tab bar inserts the tab, anywhere else floats the pane in
 /// a window inside the view. A floating window moves by its tab bar, or by its tab when it holds one pane,
 /// which also docks it. It resizes by its border. Escape cancels a drag.
-final class DockView : Node, WindowKeys, AccessFrames
+final class DockView : Node, WindowKeys, AccessPartTree
 {
     DockSpace space;       /// dock layout shown
     Node[string] panes;    /// pane content nodes by pane ID
@@ -834,6 +843,7 @@ final class DockView : Node, WindowKeys, AccessFrames
     private Drop drop;           /// target under the pointer while docking
     private DockNode guided;     /// stack whose drop buttons show
     private Point pointer;       /// last pointer position, local
+    private AccessItem[] items;  /// items exposed to screen readers as of the last access update
 
     /// Creates a view of `space` showing `panes`.
     this(DockSpace space, Node[string] panes, string[string] titles)
@@ -930,19 +940,110 @@ final class DockView : Node, WindowKeys, AccessFrames
         return true;
     }
 
-    /// Exposes each shown pane inside a pane named by its tab title.
-    bool accessFrame(Node c, ref AccessInfo a, ref Rect r)
+    /// Number of items exposed to screen readers: per stack a tab list holding its tabs, then a pane named by the
+    /// chosen tab holding its content. Lists them anew, so the other item calls refer to this update.
+    size_t accessPartCount()
     {
-        foreach (string id, Node n; panes)
+        items = null;
+        void walk(DockNode n)
         {
-            if (n is c)
+            if (n.kind == Kind.split)
             {
-                a.role = Role.pane;
-                a.label = titleOf(id);
-                return true;
+                foreach (DockNode k; n.children)
+                {
+                    walk(k);
+                }
+                return;
+            }
+            ptrdiff_t list = items.length;
+            items ~= AccessItem(n, Role.tabList, 0, -1);
+            foreach (size_t i; 0 .. n.panes.length)
+            {
+                items ~= AccessItem(n, Role.tab, i, list);
+            }
+            if (n.panes.length > 0)
+            {
+                items ~= AccessItem(n, Role.pane, n.active, -1);
             }
         }
-        return false;
+
+        walk(space.root);
+        foreach (ref Floating f; space.floating)
+        {
+            walk(f.root);
+        }
+        return items.length;
+    }
+
+    /// Item `i`: a tab named by its title, selected when chosen, a pane named by its chosen tab, or a tab list.
+    void describePart(size_t i, ref AccessInfo a, ref Rect r)
+    {
+        AccessItem it = items[i];
+        Point at = bounds.pos;
+        a.role = it.role;
+        switch (it.role)
+        {
+        case Role.tabList:
+            r = Rect(it.stack.rect.x, it.stack.rect.y, it.stack.rect.w, tabBarHeight).translate(at);
+            break;
+        case Role.tab:
+            DockStyle s = tree.style!DockStyle();
+            a.label = titleOf(it.stack.panes[it.tab]);
+            a.selected = tri(it.tab == it.stack.active);
+            a.allow(AccessAction.click);
+            r = tabRects(it.stack, s)[it.tab].translate(at);
+            break;
+        default:
+            a.label = titleOf(it.stack.panes[it.tab]);
+            r = contentOf(it.stack).translate(at);
+            break;
+        }
+    }
+
+    /// Tab list of item `i`'s tab, else none.
+    ptrdiff_t partParent(size_t i)
+    {
+        return items[i].parent;
+    }
+
+    /// Pane item showing `c`, or -1.
+    ptrdiff_t childPart(Node c)
+    {
+        foreach (size_t i, AccessItem it; items)
+        {
+            if (it.role == Role.pane)
+            {
+                Node* p = it.stack.panes[it.tab] in panes;
+                if (p !is null && *p is c)
+                {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+
+    /// Click chooses the tab of item `i`.
+    bool accessPartAction(size_t i, ref const AccessRequest r)
+    {
+        if (r.action != AccessAction.click || i >= items.length || items[i].role != Role.tab)
+        {
+            return false;
+        }
+        AccessItem it = items[i];
+        if (it.tab >= it.stack.panes.length)
+        {
+            return false;
+        }
+        activate(it.stack, it.tab);
+        markNeedsLayout();
+        return true;
+    }
+
+    /// No item takes focus.
+    ptrdiff_t accessFocusPart()
+    {
+        return -1;
     }
 
     /// Title of pane `id`.

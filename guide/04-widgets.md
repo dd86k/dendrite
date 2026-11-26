@@ -92,7 +92,11 @@ Widgets describe themselves to screen readers (enable with
 `WindowOptions.accessibility`). A widget is named by its caption. One
 without a caption, such as a text box, an icon button or a slider, needs an
 `accessName:`, as `exportForm` gives the name box. Every builder takes it.
-A label names the control it is for: `label("Name", for_: box)`.
+A label names the control it is for, and a click on it focuses that
+control: `label("Name", for_: box)`. In an island, `ui.label("Name",
+forNext: true)` does the same for the control declared next.
 `label(() => status.get, live: Live.polite)` makes screen readers announce
 its changes, for a status line. `Live.assertive` interrupts them, for
-urgent alerts. Dock panes are named by their tabs.
+urgent alerts. A dock view exposes each stack as a tab list followed by a
+pane named by the chosen tab, and choosing a tab from a screen reader
+switches it.

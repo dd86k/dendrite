@@ -67,12 +67,11 @@ Known gaps, by area.
 
 ## Accessibility
 
-- A label names a control only when linked by `label(..., for_: control)`.
-  Island labels cannot be linked or live. Over AT-SPI the control gets the
-  name but no labelled-by relation, which accesskit-c 0.23 does not map.
+- A label names a control only when linked by `label(..., for_: control)`,
+  or in an island by `forNext: true` on a label declared right before it.
+  Over AT-SPI the control gets the name but no labelled-by relation, which
+  accesskit-c 0.23 does not map.
 - Text fields have no character bounds, screen readers cannot move the caret.
-- Dock tab bars are not exposed: a screen reader reaches only the shown pane
-  of each stack.
 - Table cells are not exposed as cells.
 - Island text boxes take no `setValue`.
 - Only the Linux adapter has been run (AT-SPI). Windows and macOS follow

@@ -211,6 +211,8 @@ final class Ui
     private Popup[Id] popups;       /// open popups by the control they belong to
     private ContextArea[] areas;    /// context menu areas of this pass
     private ContextArea[] lastAreas; /// context menu areas of the last pass
+    private Node nextLabel;         /// label naming the next tracked node, from `labelNext`, or null
+    private bool labelClicked;      /// that label was clicked, so the next Tab stop takes focus
 
     /// Scoped edits of style `T`, innermost last.
     private static final class Edits(T)
@@ -329,6 +331,8 @@ final class Ui
         rects = null;
         accessSeq = 0;
         areas.length = 0;
+        nextLabel = null;
+        labelClicked = false;
         areas.assumeSafeAppend();
     }
 
@@ -493,11 +497,29 @@ final class Ui
         return n;
     }
 
-    /// Records the rect of `n` under `id` at the end of the pass, for `hovered` and `clickable`.
+    /// Records the rect of `n` under `id` at the end of the pass, for `hovered` and `clickable`, and gives it a label
+    /// pending from `labelNext`.
     void track(Node n, Id id)
     {
         n.accessId = accessIdFor(id);
+        if (nextLabel !is null)
+        {
+            if (n.labelledBy is null)
+            {
+                n.labelledBy = nextLabel;
+            }
+            nextLabel = null;
+            labelClicked = false;
+        }
         tracked ~= Tracked(n, id);
+    }
+
+    /// Makes `label` name the next node tracked this pass for screen readers, and when `clicked` focuses the next
+    /// Tab stop, as an island label with `forNext` does. Null drops a pending one.
+    void labelNext(Node label, bool clicked)
+    {
+        nextLabel = label;
+        labelClicked = label !is null && clicked;
     }
 
     /// Access id of key `k` in this island. The top bit keeps it apart from the ids of retained nodes.
@@ -672,7 +694,13 @@ final class Ui
             return false;
         }
         stops ~= Stop(id, group, chosen);
-        if (pressed && pressedOn == id)
+        if (labelClicked)
+        {
+            labelClicked = false;
+            focus = id;
+            pressFocused = true;
+        }
+        else if (pressed && pressedOn == id)
         {
             focus = id;
             pressFocused = true;

@@ -447,12 +447,14 @@ final class TabBar : Node, AccessParts
                 if (stacked)
                 {
                     float tw = t.measure(s.font, s.size, title);
-                    float cx = r.x + s.padX + (r.w - s.padX * 2 - (onClose !is null ? s.closeGap + s.closeSize : 0)) / 2;
+                    float closeW = onClose !is null ? s.closeGap + s.closeSize : 0;
+                    float cx = r.x + s.padX + (r.w - s.padX * 2 - closeW) / 2;
                     tx = cx - tw / 2;
                     float top = r.y + s.stackPadY;
                     if (iconOf(i).empty == false)
                     {
-                        paintIcon(*ctx.list, iconOf(i), Rect(cx - s.iconSize / 2, top, s.iconSize, s.iconSize), ink, on == false);
+                        Rect ir = Rect(cx - s.iconSize / 2, top, s.iconSize, s.iconSize);
+                        paintIcon(*ctx.list, iconOf(i), ir, ink, on == false);
                     }
                     tbase = top + (anyIcon ? s.iconSize + s.stackGap : 0) + t.ascent(s.font, s.size);
                 }

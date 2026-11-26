@@ -237,8 +237,8 @@ interface AccessContent
     Node accessContent(); /// root of those nodes, or null
 }
 
-/// Node drawing several items without a node each, such as a tab strip. Each item is exposed as a child of the
-/// node, after its own.
+/// Node drawing several items without a node each, such as a tab strip. Each item is exposed before the node's
+/// children, as a child of the node, or of its nearest exposed parent when the node itself is not exposed.
 interface AccessParts
 {
     size_t accessPartCount();                                   /// number of items
@@ -247,11 +247,12 @@ interface AccessParts
     ptrdiff_t accessFocusPart();                                /// item with the node's focus, or -1
 }
 
-/// Node exposing some children inside a node of their own, such as a dock view naming each pane by its tab.
-interface AccessFrames
+/// `AccessParts` node whose items hold other items or its children, such as a dock view with a tab list and a
+/// pane per stack.
+interface AccessPartTree : AccessParts
 {
-    /// Fills `a` and `r` for the node around child `c`, false to expose `c` alone. `r` starts as `c`'s bounds.
-    bool accessFrame(Node c, ref AccessInfo a, ref Rect r);
+    ptrdiff_t partParent(size_t i); /// item holding item `i`, one before it, or -1 for none
+    ptrdiff_t childPart(Node c);    /// item holding child `c`, or -1 for none
 }
 
 /// Id of the window node.
@@ -376,37 +377,60 @@ final class AccessTree
     }
 
     /// Adds the exposed nodes under `n` to `into`, their descriptions to `now`, and `owner` as the action handler
-    /// of each when set. `menu` is set inside a node with a context menu.
+    /// of each when set. `menu` is set inside a node with a context menu. The items of an `AccessParts` node come
+    /// first, and only they when `leaf` is set.
     private void collect(Node n, ref ulong[] into, ref AccessNode[ulong] now, ref Node[ulong] byId,
-        ref AccessActions[ulong] by, AccessActions owner, bool menu)
+        ref AccessActions[ulong] by, AccessActions owner, bool menu, bool leaf = false)
     {
         menu = menu || n.hasContextMenu;
-        Node[] kids = n.children;
-        if (AccessContent ac = cast(AccessContent) n)
-        {
-            Node inner = ac.accessContent();
-            kids = inner is null ? null : [inner];
-        }
         if (AccessActions h = cast(AccessActions) n)
         {
             owner = h;
         }
-        AccessFrames frames = cast(AccessFrames) n;
+        AccessNode[] items;
+        ulong[][] held; // ids each item holds
+        ulong[] top;
+        AccessPartTree nest = cast(AccessPartTree) n;
+        if (AccessParts p = cast(AccessParts) n)
+        {
+            ulong id = accessIdOf(n);
+            items.length = p.accessPartCount();
+            held.length = items.length;
+            foreach (size_t i, ref AccessNode pn; items)
+            {
+                pn.id = partId(id, i);
+                pn.bounds = n.bounds;
+                p.describePart(i, pn.info, pn.bounds);
+                ptrdiff_t up = nest is null ? -1 : nest.partParent(i);
+                if (up >= 0 && up < i)
+                {
+                    held[up] ~= pn.id;
+                }
+                else
+                {
+                    top ~= pn.id;
+                }
+            }
+        }
+        Node[] kids = leaf ? null : n.children;
+        if (AccessContent ac = cast(AccessContent) n)
+        {
+            Node inner = ac.accessContent();
+            kids = inner is null || leaf ? null : [inner];
+        }
         foreach (Node c; kids)
         {
-            AccessNode fn;
-            fn.bounds = c.bounds;
-            if (frames is null || frames.accessFrame(c, fn.info, fn.bounds) == false)
-            {
-                visit(c, into, now, byId, by, owner, menu);
-                continue;
-            }
-            fn.id = frameId(accessIdOf(c));
-            visit(c, fn.children, now, byId, by, owner, menu);
-            into ~= fn.id;
-            now[fn.id] = fn;
-            byId[fn.id] = n;
+            ptrdiff_t k = nest is null ? -1 : nest.childPart(c);
+            visit(c, k >= 0 && k < items.length ? held[k] : top, now, byId, by, owner, menu);
         }
+        foreach (size_t i, ref AccessNode pn; items)
+        {
+            pn.children = held[i];
+            now[pn.id] = pn;
+            byId[pn.id] = n;
+            parts[pn.id] = i;
+        }
+        into ~= top;
     }
 
     /// Adds `c` to `into` when exposed, else its exposed descendants, as `collect` does for each child.
@@ -457,24 +481,7 @@ final class AccessTree
         an.info = a;
         an.bounds = c.bounds;
         an.labelledBy = c.labelledBy is null ? 0 : accessIdOf(c.labelledBy);
-        if (a.leaf == false)
-        {
-            collect(c, an.children, now, byId, by, owner, menu);
-        }
-        if (AccessParts p = cast(AccessParts) c)
-        {
-            foreach (size_t i; 0 .. p.accessPartCount())
-            {
-                AccessNode pn;
-                pn.id = partId(an.id, i);
-                pn.bounds = an.bounds;
-                p.describePart(i, pn.info, pn.bounds);
-                an.children ~= pn.id;
-                now[pn.id] = pn;
-                byId[pn.id] = c;
-                parts[pn.id] = i;
-            }
-        }
+        collect(c, an.children, now, byId, by, owner, menu, a.leaf);
         into ~= an.id;
         now[an.id] = an;
         byId[an.id] = c;
@@ -490,12 +497,6 @@ final class AccessTree
         return (mixId(i, id) | 1UL << 62) & ~(1UL << 63);
     }
 
-    /// Id of the node an `AccessFrames` node puts around the node with id `id`, among the part ids.
-    private static ulong frameId(ulong id)
-    {
-        return partId(id, size_t.max);
-    }
-
     /// Id of the nearest exposed node at or above `focus`, asking `AccessFocus` and `AccessParts` nodes first.
     private ulong focusId(Node focus, ref Node[ulong] byId)
     {
@@ -509,7 +510,7 @@ final class AccessTree
         if (AccessParts p = cast(AccessParts) focus)
         {
             ptrdiff_t i = p.accessFocusPart();
-            if (i >= 0 && focus.accessId != 0 && (focus.accessId in byId) !is null)
+            if (i >= 0 && focus.accessId != 0 && (partId(focus.accessId, i) in byId) !is null)
             {
                 return partId(focus.accessId, i);
             }
@@ -667,8 +668,9 @@ string nodeText(Node n, string sep = " ")
     return a.role == Role.label ? a.label : contentText(n, sep);
 }
 
-// A label names the control it is for, with a relation only while the label is exposed. A live label says how
-// its changes are announced, and dock panes are named by their tabs.
+// A label names the control it is for, with a relation only while the label is exposed, and a click on it focuses
+// the control, in islands too. A live label says how its changes are announced, and a dock view exposes per stack
+// a tab list and a pane named by the chosen tab.
 unittest
 {
     import dentrite.backend.software : SoftwareRenderer;
@@ -676,7 +678,9 @@ unittest
     import dentrite.dock : DockNode, DockSpace, DockView;
     import dentrite.headless : HeadlessPlatform;
     import dentrite.host : Host;
-    import dentrite.platform : WindowOptions;
+    import dentrite.immediate : Ui;
+    import dentrite.island : island;
+    import dentrite.platform : Event, EventKind, WindowOptions;
     import dentrite.signals : Signal, signal;
     import dentrite.widgets.button : button;
     import dentrite.widgets.label : Label, label;
@@ -691,25 +695,45 @@ unittest
     {
         h.close();
     }
+
+    /// Sends `action` to node `id` and runs a frame.
+    void ask(ulong id, AccessAction action)
+    {
+        Event e = {kind: EventKind.access, request: AccessRequest(id, action)};
+        h.handle(e);
+        h.frame();
+    }
+
     p.listening = AccessDemand.full;
     Signal!string name = signal("");
     Signal!string status = signal("Idle");
     TextBox box = textBox(name);
     Label caption = label("File name", for_: box);
     Label line = label(() => status.get, live: Live.polite);
-    Node[string] panes = ["log": button("Clear"), "watch": label("Empty")];
-    DockView dock = new DockView(new DockSpace(DockNode.split(false, DockNode.stack("log"),
-        DockNode.stack("watch"))), panes, ["log": "Log"]);
+    Node[string] panes = ["log": button("Clear"), "calls": label("No calls"), "watch": label("Empty")];
+    DockView dock = new DockView(new DockSpace(DockNode.split(false, DockNode.stack("log", "calls"),
+        DockNode.stack("watch"))), panes, ["log": "Log", "calls": "Calls"]);
     h.setRoot(column()(row()(caption, sized(w: 150)(box)), line, sized(h: 200)(dock)));
     h.frame();
 
     const(AccessNode)* field = h.access.find(Role.textInput, "File name");
     assert(field !is null && field.labelledBy == caption.accessId);
+    h.click(Role.label, "File name");
+    assert(h.focused is box, "a click on the label focuses its control");
     assert(h.access.find(Role.label, "Idle").info.live == Live.polite);
     const(AccessNode)* log = h.access.find(Role.pane, "Log");
     const(AccessNode)* watch = h.access.find(Role.pane, "watch");
     assert(log !is null && watch !is null, "named by the title, or the ID without one");
     assert(log.children == [panes["log"].accessId] && log.bounds == panes["log"].bounds);
+    const(AccessNode)* calls = h.access.find(Role.tab, "Calls");
+    assert(h.access.find(Role.tab, "Log").info.selected == Tri.yes && calls.info.selected == Tri.no);
+    assert(h.access.find(Role.pane, "Calls") is null, "a pane only for the chosen tab");
+    ask(calls.id, AccessAction.click);
+    log = h.access.find(Role.pane, "Calls");
+    assert(log !is null && log.children == [panes["calls"].accessId], "a tab chosen from a screen reader");
+    assert(h.access.find(Role.tab, "Calls").info.selected == Tri.yes);
+    h.click(Role.tab, "Log");
+    assert(h.access.find(Role.pane, "Log") !is null, "tabs sit where they are drawn");
 
     caption.setText("Path");
     h.frame();
@@ -719,4 +743,17 @@ unittest
     h.frame();
     field = h.access.find(Role.textInput, "Hidden");
     assert(field !is null && field.labelledBy == 0, "no relation to a label that is gone");
+
+    string mail;
+    h.setRoot(island((Ui ui) {
+        ui.label("Mail", forNext: true);
+        ui.textBox(mail);
+        ui.label(mail.length > 0 ? "Typed" : "Empty", live: Live.assertive);
+    }));
+    h.frame();
+    field = h.access.find(Role.textInput, "Mail");
+    assert(field !is null && field.labelledBy == h.access.find(Role.label, "Mail").id);
+    assert(h.access.find(Role.label, "Empty").info.live == Live.assertive);
+    h.click(Role.label, "Mail");
+    assert(p.accessUpdates[$ - 1].focus == field.id, "a click on an island label focuses the control");
 }

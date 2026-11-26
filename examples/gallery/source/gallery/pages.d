@@ -930,14 +930,14 @@ Node islandsPage()
                 ui.row(gap: 16)({
                     ui.radio(round_, true, "Dots");
                     ui.radio(round_, false, "Squares");
-                    ui.label("Size", "muted");
+                    ui.label("Size", "muted", forNext: true);
                     ui.slider(dotSize, 4f, 24f, 2f);
                     ui.label(format("%g px", dotSize), "monoMuted");
                 });
                 ui.row(gap: 10)({
-                    ui.label("Caption", "muted");
+                    ui.label("Caption", "muted", forNext: true);
                     ui.expand({ ui.textBox(caption, "Name the dots"); });
-                    ui.label("Goal", "muted");
+                    ui.label("Goal", "muted", forNext: true);
                     ui.comboBox(goals, goal);
                     ui.menuButton("Dots", dotsMenu, variant: "toolbar");
                 });
