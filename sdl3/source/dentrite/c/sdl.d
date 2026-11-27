@@ -195,7 +195,7 @@ struct SDL_MouseWheelEvent
     uint which;      /// mouse
     float x;         /// horizontal amount, positive right
     float y;         /// vertical amount, positive away from the user
-    int direction;   /// 1 when flipped
+    int direction;   /// 1 when x and y are already flipped by natural scrolling
     float mouseX;    /// pointer position
     float mouseY;    /// pointer position
 }

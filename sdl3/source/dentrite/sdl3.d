@@ -870,11 +870,10 @@ final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, T
             e.mods = modsOf(SDL_GetModState());
             break;
         case SDL_EventType.mouseWheel:
-            float dir = s.wheel.direction == 1 ? -1 : 1;
             e.kind = EventKind.wheel;
             e.pos = toPixels(s.wheel.mouseX, s.wheel.mouseY);
-            e.dx = s.wheel.x * dir;
-            e.dy = -s.wheel.y * dir;
+            e.dx = s.wheel.x;
+            e.dy = -s.wheel.y;
             e.mods = modsOf(SDL_GetModState());
             break;
         case SDL_EventType.keyDown:
