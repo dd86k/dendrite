@@ -25,6 +25,7 @@ import dentrite.widgets.dialog;
 import dentrite.widgets.icons;
 import dentrite.widgets.image;
 import dentrite.widgets.label;
+import dentrite.widgets.link;
 import dentrite.widgets.list;
 import dentrite.widgets.menu;
 import dentrite.widgets.progress;
@@ -95,6 +96,7 @@ Page[] pages(Gallery g)
         Page("Check boxes", "Boxes bound to signals, with and without captions.", () => checkboxesPage()),
         Page("Radio buttons", "One choice among options, grouped by the signal they share.", () => radiosPage()),
         Page("Text", "Label variants from the theme, wrapping and alignment.", () => textPage()),
+        Page("Links", "Text that opens an address in the browser or runs an action.", () => linksPage()),
         Page("Text boxes", "Single-line editing bound to signals.", () => textBoxesPage()),
         Page("Text areas", "Multi-line editing: wrapping, code with line numbers, undo.", () => textAreasPage()),
         Page("Spin boxes", "Numbers typed or stepped with buttons, keys and the wheel.", () => spinBoxesPage()),
@@ -214,6 +216,28 @@ Node checkboxesPage()
         section("Disabled", column(gap: 8, cross: CrossAlign.start)(
             checkbox(enabled, "Enable the boxes below"),
             line(checkbox(bold, "Bold", enabled: &enabled.get), checkbox(under, "Underline", enabled: &enabled.get)),
+        )),
+    );
+}
+
+/// Links to addresses, links running actions, inside a sentence and disabled.
+Node linksPage()
+{
+    enum string repo = "https://github.com/dd86k/dentrite";
+    enum string guide = "https://dd86k.github.io/dendrite/";
+    Signal!int count = signal(0);
+    Signal!bool enabled = signal(false);
+    return column(gap: 22)(
+        section("To an address", column(gap: 8, cross: CrossAlign.start)(
+            link("dentrite on GitHub", repo, tooltip: repo),
+            label("Opens with the system's browser. The tooltip shows where it goes.", "muted"),
+        )),
+        section("Running an action", line(link("Count", onActivate: () { count.set(count.peek + 1); }),
+            label(() => format("clicked %d times", count.get), "mono"))),
+        section("In a sentence", row()(label("Read the "), link("usage guide", guide), label(" first."))),
+        section("Disabled", column(gap: 8, cross: CrossAlign.start)(
+            checkbox(enabled, "Enable the link below"),
+            link("API reference", guide ~ "api/", enabled: &enabled.get),
         )),
     );
 }
@@ -978,6 +1002,10 @@ Node islandsPage()
                         ++clicks;
                     }
                     ui.label(format("%d clicks", clicks));
+                    if (ui.link("Reset", enabled: clicks > 0))
+                    {
+                        clicks = 0;
+                    }
                     ui.checkbox(grid, "Grid");
                     if (ui.button("Clear dots", variant: "toolbar", enabled: dots.length > 0))
                     {

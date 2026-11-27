@@ -12,7 +12,8 @@ import dentrite.platform;
 import dentrite.text : GlyphAtlas;
 
 /// Fixed size framebuffer with events queued by the app.
-final class HeadlessPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, Trays, PopupWindows, Appearance
+final class HeadlessPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, Trays, PopupWindows, Appearance,
+    Urls
 {
     Metrics size;        /// framebuffer size and scale
     Event[] queue;       /// events `wait` hands out, oldest first
@@ -35,6 +36,8 @@ final class HeadlessPlatform : Platform, FileDialogs, AccessAdapter, WindowContr
     Rect screen;         /// what `popupArea` answers, empty for no popup windows
     HeadlessPopup[] popups; /// popup windows opened, closed ones included
     ColorScheme scheme;  /// what `colorScheme` answers
+    string[] urls;       /// URLs opened, oldest first
+    bool urlless;        /// true to refuse every URL, as a system without a handler
 
     /// Platform `w` by `h` logical pixels at `scale`.
     this(int w, int h, float scale = 1)
@@ -124,6 +127,17 @@ final class HeadlessPlatform : Platform, FileDialogs, AccessAdapter, WindowContr
     void setMinimumSize(int w, int h)
     {
         minSize = [w, h];
+    }
+
+    /// Records `url`, false when `urlless`.
+    bool openUrl(string url)
+    {
+        if (urlless)
+        {
+            return false;
+        }
+        urls ~= url;
+        return true;
     }
 
     /// Records the icon.

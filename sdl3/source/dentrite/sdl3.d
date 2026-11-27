@@ -339,7 +339,8 @@ private final class SdlPopup : PopupWindow
 }
 
 /// SDL3 window with a GL 3.3 context or a software surface.
-final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, Trays, PopupWindows, Appearance
+final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, Trays, PopupWindows, Appearance,
+    Urls
 {
     Renderer renderer;              /// renderer drawing into this window, created along with it
     /// Called with every SDL event on the UI thread, before the library handles it.
@@ -1197,6 +1198,12 @@ final class SdlPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, T
     private int toWindow(int n)
     {
         return forced > 0 ? cast(int)(n * forced) : n;
+    }
+
+    /// Opens `url` with the system handler, false if SDL failed.
+    bool openUrl(string url)
+    {
+        return SDL_OpenURL(url.toStringz);
     }
 
     /// Sets the title bar text.

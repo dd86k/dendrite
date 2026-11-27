@@ -142,6 +142,12 @@ interface FileDialogs
     void fileDialog(FileDialogKind kind, const(FileFilter)[] filters, string start, void delegate(string[]) done);
 }
 
+/// Platform that opens URLs with the system's handler, such as the default browser.
+interface Urls
+{
+    bool openUrl(string url); /// opens `url`, false if the system refused it
+}
+
 /// Platform whose window the app can change once open. Sizes are in logical pixels.
 interface WindowControl
 {

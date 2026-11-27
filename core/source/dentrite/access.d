@@ -27,6 +27,7 @@ enum Role : ubyte
     pane,               /// dock pane or panel with a title
     label,              /// static text
     button,             /// push button
+    link,               /// goes to a URL or a place in the app
     checkBox,           /// on or off
     radioButton,        /// one of a group
     slider,             /// number in a range
@@ -122,6 +123,7 @@ struct AccessInfo
     string description; /// longer help, the tooltip if not set and the node has a label
     string placeholder; /// hint shown in an empty text field
     string shortcut;    /// key that runs it, such as "Ctrl+S"
+    string url;         /// links: target address, null for one within the app
     Toggle toggled;     /// check state
     Tri selected;       /// whether it is the chosen row, tab or option
     Tri expanded;       /// whether its children or popup are open

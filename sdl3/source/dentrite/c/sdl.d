@@ -362,6 +362,7 @@ enum uint SDL_PEN_MOUSEID = 0xfffffffe;                 /// mouse id of mouse ev
 
 char* SDL_GetClipboardText();                           /// clipboard, free with SDL_free
 bool SDL_SetClipboardText(const(char)* text);           /// sets the clipboard
+bool SDL_OpenURL(const(char)* url);                     /// opens a URL with the system handler
 
 SDL_Cursor* SDL_CreateSystemCursor(SDL_SystemCursor id); /// stock cursor
 bool SDL_SetCursor(SDL_Cursor* cursor);                 /// active cursor

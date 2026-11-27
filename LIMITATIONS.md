@@ -118,6 +118,8 @@ Known gaps, by area.
   are cut at a code point, which can split a character built from several.
 - Spin boxes: plain decimals only, no units, separators or hex.
 - Tooltips: text only.
+- Links: a link is a whole label of its own. No links inside wrapped text, put
+  labels and links in a row for one in a sentence. No visited state.
 - Popups: a plain column stretches to the window width, give it a width.
   Menus size to their items.
 - Menus: mnemonics show only after a menu opened from the keyboard (Alt alone

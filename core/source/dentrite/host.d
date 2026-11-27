@@ -26,6 +26,7 @@ import dentrite.theme : Theme;
 import dentrite.widgets.button : ButtonStyle;
 import dentrite.widgets.checkbox : CheckboxStyle;
 import dentrite.widgets.label : TextStyle;
+import dentrite.widgets.link : LinkStyle;
 import dentrite.widgets.list : ListStyle;
 import dentrite.widgets.combobox : ComboBoxStyle;
 import dentrite.widgets.dialog : DialogStyle;
@@ -60,7 +61,7 @@ struct WindowStyle
 alias LibraryStyles = AliasSeq!(WindowStyle, TextStyle, ButtonStyle, CheckboxStyle, TextBoxStyle, ListStyle,
     PanelStyle, ScrollStyle, SeparatorStyle, DockStyle, PopupStyle, MenuStyle, MenuBarStyle, ComboBoxStyle,
     TooltipStyle, RadioStyle, SliderStyle, ProgressStyle, TabsStyle, SpinBoxStyle, TreeStyle, TableStyle,
-    DialogStyle, TextAreaStyle, IslandStyle, SplitViewStyle, HandleStyle);
+    DialogStyle, TextAreaStyle, IslandStyle, SplitViewStyle, HandleStyle, LinkStyle);
 
 /// Timings and sizes of the last frame.
 struct FrameStats
@@ -1715,6 +1716,14 @@ class Host : Services
         {
             done(null);
         }
+    }
+
+    /// Opens `url` with the system's handler, such as the default browser. False if the platform cannot open
+    /// URLs or the system refused it.
+    bool openUrl(string url)
+    {
+        Urls u = cast(Urls) platform;
+        return u !is null && u.openUrl(url);
     }
 
     /// Window size in logical pixels, tracked by the running effect or computed.

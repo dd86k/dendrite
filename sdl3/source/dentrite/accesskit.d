@@ -275,6 +275,7 @@ private accesskit_node* nodeOf(ref const AccessNode n)
     setText(k, accesskit_node_set_description_with_length, a.description);
     setText(k, accesskit_node_set_placeholder_with_length, a.placeholder);
     setText(k, accesskit_node_set_keyboard_shortcut_with_length, a.shortcut);
+    setText(k, accesskit_node_set_url_with_length, a.url);
     accesskit_node_set_bounds(k, accesskit_rect(n.bounds.x, n.bounds.y, n.bounds.x + n.bounds.w,
         n.bounds.y + n.bounds.h));
     if (n.children.length > 0 && isText(a.role) == false)
@@ -545,6 +546,8 @@ private ubyte roleOf(Role r)
         return ACCESSKIT_ROLE_LABEL;
     case Role.button:
         return ACCESSKIT_ROLE_BUTTON;
+    case Role.link:
+        return ACCESSKIT_ROLE_LINK;
     case Role.checkBox:
         return ACCESSKIT_ROLE_CHECK_BOX;
     case Role.radioButton:

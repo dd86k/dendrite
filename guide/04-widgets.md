@@ -45,6 +45,7 @@ The slider and the spin box share `s.width`, so either one moves the other.
 |---|---|---|
 | `label(text)`, `label(() => text)` | `label` | Text |
 | `button(caption, onClick:)` | `button` | Buttons |
+| `link(text, url)`, `link(text, onActivate:)` | `link` | Links |
 | `checkbox(signal, caption)` | `checkbox` | Check boxes |
 | `radio(signal, option, caption)`, `radioGroup(signal)` | `radio` | Radio buttons |
 | `textBox(signal, password:)` | `textbox` | Text boxes |
@@ -56,6 +57,10 @@ The slider and the spin box share `s.width`, so either one moves the other.
 | `iconView(icon)`, `imageView(image, fit)` | `icons`, `image` | Images |
 | `tabs(signal)(tab(title, page)...)`, `tabBar(titles, signal)`, `tabBar(() => tabInfos, signal)` | `tabs` | Tabs |
 | `listItem(onClick:, selected:, variant:)(content)` | `list` | Lists |
+
+A link opens its address with the system's browser through `Host.openUrl`,
+which apps can call too. `onActivate:` replaces that, for a link within the
+app.
 
 Lists, trees and tables are in [chapter 5](05-collections.md); menus,
 dialogs and tooltips in [chapter 6](06-commands.md).

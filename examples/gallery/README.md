@@ -1,10 +1,10 @@
 # gallery
 
 Every dentrite widget in its variants and states, one page each: buttons,
-check boxes, radio buttons, text, text boxes, text areas, spin boxes, combo
-boxes, sliders, progress bars, tabs, menus, dialogs, tooltips, lists, a chat
-feed, trees, tables, layout containers, the dock and islands. Each page is
-short builder code in `source/gallery/pages.d`, meant to be read next to the
+check boxes, radio buttons, text, links, text boxes, text areas, spin boxes,
+combo boxes, sliders, progress bars, tabs, menus, dialogs, tooltips, lists, a
+chat feed, trees, tables, layout containers, the dock and islands. Each page
+is short builder code in `source/gallery/pages.d`, meant to be read next to the
 running page.
 
 ## Build and run

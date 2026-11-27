@@ -161,6 +161,7 @@ enum : ubyte
     ACCESSKIT_ROLE_CELL = 2,                   /// ditto
     ACCESSKIT_ROLE_LABEL = 3,                  /// ditto
     ACCESSKIT_ROLE_IMAGE = 4,                  /// ditto
+    ACCESSKIT_ROLE_LINK = 5,                   /// ditto
     ACCESSKIT_ROLE_ROW = 6,                    /// ditto
     ACCESSKIT_ROLE_TREE_ITEM = 9,              /// ditto
     ACCESSKIT_ROLE_LIST_BOX_OPTION = 10,       /// ditto
@@ -207,7 +208,8 @@ __gshared
     /// Sets a string property, `s` need not end in zero.
     C!(void function(accesskit_node*, const(char)* s, size_t length)) accesskit_node_set_label_with_length,
         accesskit_node_set_value_with_length, accesskit_node_set_description_with_length,
-        accesskit_node_set_placeholder_with_length, accesskit_node_set_keyboard_shortcut_with_length;
+        accesskit_node_set_placeholder_with_length, accesskit_node_set_keyboard_shortcut_with_length,
+        accesskit_node_set_url_with_length;
     /// Adds a node naming this one.
     C!(void function(accesskit_node*, accesskit_node_id)) accesskit_node_push_labelled_by;
     /// Sets the children.
@@ -347,6 +349,7 @@ else
 private enum string[] commonNames = ["accesskit_node_new", "accesskit_node_set_label_with_length",
     "accesskit_node_set_value_with_length", "accesskit_node_set_description_with_length",
     "accesskit_node_set_placeholder_with_length", "accesskit_node_set_keyboard_shortcut_with_length",
+    "accesskit_node_set_url_with_length",
     "accesskit_node_set_children", "accesskit_node_add_action", "accesskit_node_set_bounds",
     "accesskit_node_set_transform", "accesskit_node_set_disabled", "accesskit_node_set_read_only",
     "accesskit_node_set_modal", "accesskit_node_set_multiselectable", "accesskit_node_set_selected",

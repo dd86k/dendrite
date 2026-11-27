@@ -211,6 +211,7 @@ interface Services
     bool focusVisible();             /// focus last moved by keyboard, so rings should show
     void forget(Node n);             /// drops hover, capture and focus held by `n`, which is leaving the tree
     void passKey(Node from, KeyEvent e); /// sends a key `from` did not use to its parents, then to the window
+    bool openUrl(string url);        /// opens `url` with the system's handler, false if it could not
     /// Lets go of the held press: until the release, hover follows the pointer and the node under it gets the
     /// release, as a menu bar title hands a drag to the menu it opened. NOTE: meant for a node that opens a
     /// popup which blocks what is below, else a release on a button clicks it.
@@ -1353,6 +1354,7 @@ unittest
         bool focusVisible() { return false; }
         void forget(Node n) {}
         void passKey(Node from, KeyEvent e) {}
+        bool openUrl(string url) { return false; }
         void slidePress() {}
     }
 

@@ -176,6 +176,13 @@ text = gray.200
 textDisabled = gray.500
 focus = blue.500
 
+[link]
+text = blue.400
+textHover = gray.100
+textPressed = blue.500
+textDisabled = gray.500
+focus = blue.500
+
 [radio]
 box = gray.850
 boxHover = gray.800
