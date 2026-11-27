@@ -250,6 +250,12 @@ gutterCurrent = gray.300
 font = mono
 size = 12.5
 
+# Code without ligatures, for the toggle on the Text areas page.
+[textarea.codePlain]
+font = mono
+size = 12.5
+features = noContextual | noLigatures
+
 [tree]
 arrow = gray.400
 arrowHover = gray.100

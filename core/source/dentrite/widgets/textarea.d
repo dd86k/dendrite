@@ -258,6 +258,17 @@ final class TextArea : Node, Composer, DragScroller, HandleTarget
         markNeedsPaint();
     }
 
+    /// Switches the style variant and shapes the text again.
+    void setVariant(string v)
+    {
+        if (v == variant)
+        {
+            return;
+        }
+        variant = v;
+        linesChanged();
+    }
+
     /// Breaks long lines at spaces when `on`, else scrolls sideways.
     void setWrap(bool on)
     {
@@ -1935,4 +1946,26 @@ unittest
     assert(wordAt("std.algorithm : filter", 13) == [4, 13]);
     assert(wordAt("std.algorithm : filter", 14) == [13, 16]);
     assert(wordAt("", 0) == [0, 0]);
+}
+
+// Switching the variant shapes the lines again in the new font.
+unittest
+{
+    import dentrite.containers : column;
+    import dentrite.host : Host;
+    import dentrite.signals : signal;
+    import dentrite.widgets.menu : menuHost;
+
+    Host h = menuHost(400, 300);
+    scope (exit)
+    {
+        h.close();
+    }
+    TextArea a = textArea(signal("iiii"));
+    h.setRoot(column()(a));
+    h.frame();
+    float ui = a.runs[0].width;
+    a.setVariant("code");
+    h.frame();
+    assert(a.variant == "code" && a.runs[0].width > ui, "mono i is wider");
 }

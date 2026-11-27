@@ -54,7 +54,8 @@ import std.string : toLower;
 alias GalleryStyles = AliasSeq!(LibraryStyles, Variants!(ButtonStyle, "large"),
     Variants!(PanelStyle, "bubble", "bubbleMine"),
     Variants!(TextStyle, "bubbleMine", "bubbleTime", "name0", "name1", "name2", "name3"),
-    Variants!(TextStyle, "tabular", "fractions", "superscript", "slashedZero", "ss01", "noContextual"));
+    Variants!(TextStyle, "tabular", "fractions", "superscript", "slashedZero", "ss01", "noContextual"),
+    Variants!(TextAreaStyle, "codePlain"));
 
 /// Gallery page: sidebar title, one line about it, and its content.
 struct Page
@@ -1416,13 +1417,18 @@ Node textAreasPage()
     Signal!string log = signal(sampleLog);
     Signal!string draft = signal("Tick the box to edit this text.");
     Signal!bool editable = signal(false);
+    Signal!bool ligatures = signal(true);
+    TextArea codeArea = textArea(code, variant: "code", lineNumbers: true, tabSpaces: 4);
+    effect(() { codeArea.setVariant(ligatures.get ? "code" : "codePlain"); });
     return column(gap: 22)(
         section("Wrapped, growing with its text", column(gap: 8)(
             narrow(480, textArea(notes, placeholder: "Notes", wrap: true)),
             label(() => format("%d lines, %d characters", notes.get.count('\n') + 1, notes.get.length), "muted"),
         )),
-        section("Code: line numbers, Tab inserts spaces, no wrapping", narrow(560, sized(h: 220)(
-            textArea(code, variant: "code", lineNumbers: true, tabSpaces: 4)))),
+        section("Code: line numbers, Tab inserts spaces, no wrapping", column(gap: 8, cross: CrossAlign.start)(
+            checkbox(ligatures, "Ligatures", tooltip: "Code ligatures such as => and == in the mono font"),
+            narrow(560, sized(h: 220)(codeArea)),
+        )),
         section("Read only", narrow(560, sized(h: 110)(textArea(log, readOnly: true, variant: "code")))),
         section("Disabled", column(gap: 8, cross: CrossAlign.start)(
             checkbox(editable, "Editable"),
