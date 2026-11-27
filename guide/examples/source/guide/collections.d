@@ -178,7 +178,7 @@ unittest
 /// Table of `log`: titles that sort, columns that resize, move and hide.
 Node logTable(Entry[] log, Signal!uint selected)
 {
-    return table(items: () => log, key: (Entry e) => e.id, selected: selected)(
+    return table(items: () => log, key: (Entry e) => e.id, selected: selected, stretchLast: true)(
         tableColumn("#", (Entry delegate() e) => label(() => format("%d", e().id), "mono"), width: 60,
             less: (Entry a, Entry b) => a.id < b.id),
         tableColumn("Level", (Entry delegate() e) => label(() => e().level), width: 70,

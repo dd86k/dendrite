@@ -128,7 +128,7 @@ the newest 1,000 once 2,000 arrived.
 /// Table of `log`: titles that sort, columns that resize, move and hide.
 Node logTable(Entry[] log, Signal!uint selected)
 {
-    return table(items: () => log, key: (Entry e) => e.id, selected: selected)(
+    return table(items: () => log, key: (Entry e) => e.id, selected: selected, stretchLast: true)(
         tableColumn("#", (Entry delegate() e) => label(() => format("%d", e().id), "mono"), width: 60,
             less: (Entry a, Entry b) => a.id < b.id),
         tableColumn("Level", (Entry delegate() e) => label(() => e().level), width: 70,
@@ -141,6 +141,11 @@ Node logTable(Entry[] log, Signal!uint selected)
 A table is a virtual list with a header. Cells follow the same getter rule.
 A column with `less:` sorts when its title is clicked. The table scrolls on
 its own, so do not wrap it in `scroll()`, but give it a bounded height.
+
+`stretchLast: true` lets the last shown column fill a wider table, its
+`width:` staying the least it shows. To keep column changes across runs, set
+`onColumns`, which runs after the user resizes, moves, shows or hides a
+column, and read `shownColumns` and `width(i)` there.
 
 ## Trees
 

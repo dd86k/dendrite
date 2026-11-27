@@ -76,6 +76,8 @@ final class Table(K, T) : Node, DragScroller
 {
     VirtualList!(K, T) list; /// virtual list showing the rows
     ScrollView view;         /// scroll view around the rows
+    /// Runs after the user resizes, moves, shows or hides a column, once per drag. Not for method calls.
+    void delegate() onColumns;
 
     private TableHeader!(K, T) head;   /// titles, inside the column menu
     private TableColumn!T[] columns;   /// columns in order
@@ -91,6 +93,7 @@ final class Table(K, T) : Node, DragScroller
     private float grabX;               /// pointer x minus thumb left at grab
     private Fling fling;               /// sideways content drag and fling
     private float panX = 0;            /// unrounded scroll distance while dragged or flung
+    private bool stretchLast;          /// last shown column fills the leftover width
 
     /// Creates a table. Use `table`, which also builds the rows.
     this(T[] delegate() source, K delegate(T) keyOf, TableColumn!T[] columns, Signal!K selection,
@@ -124,7 +127,7 @@ final class Table(K, T) : Node, DragScroller
         a.columnCount = cast(uint) shown.peek.length;
     }
 
-    /// Current width of column `i`.
+    /// Width set for column `i`, the one to save. The last column may show wider, see `table`.
     float width(size_t i)
     {
         return widths[i];
@@ -139,6 +142,29 @@ final class Table(K, T) : Node, DragScroller
         {
             widths[i] = w;
             columnsMoved();
+        }
+    }
+
+    /// Shown width of column `i`, wider than set for the last shown column filling the table.
+    private float span(size_t i)
+    {
+        const(size_t)[] s = shown.peek;
+        if (stretchLast == false || s[$ - 1] != i)
+        {
+            return widths[i];
+        }
+        return max(widths[i], size.w - totalWidth + widths[i]);
+    }
+
+    /// Runs `act`, then `onColumns` if that changed the widths or the shown columns.
+    private void byUser(scope void delegate() act)
+    {
+        const(size_t)[] was = shown.peek;
+        float[] w = widths.dup;
+        act();
+        if (onColumns !is null && (was != shown.peek || w != widths))
+        {
+            onColumns();
         }
     }
 
@@ -264,7 +290,7 @@ final class Table(K, T) : Node, DragScroller
     /// Menu entry showing or hiding column `i`. A function of its own so each entry keeps its column.
     private MenuItem columnItem(size_t i)
     {
-        return menuItem(columns[i].title, () { showColumn(i, isShownNow(i) == false); },
+        return menuItem(columns[i].title, () { byUser(() { showColumn(i, isShownNow(i) == false); }); },
             enabled: () => isShown(i) == false || shown.get.length > 1, checked: () => isShown(i));
     }
 
@@ -559,7 +585,8 @@ private final class TableHeader(K, T) : Node, AccessParts
     private bool moving;             /// the pressed title is being dragged to another place
     private size_t dropSlot;         /// place the moved column lands, among the other columns
     private float grabX;             /// pointer x at the press
-    private float startW;            /// width at the resize press
+    private float startW;            /// shown width at the resize press
+    private float startSet;          /// set width at the resize press
     private size_t current;          /// title the keys act on
 
     /// Creates the header of `table`.
@@ -601,7 +628,7 @@ private final class TableHeader(K, T) : Node, AccessParts
         {
             a.allow(AccessAction.click);
         }
-        r = Rect(r.x + table.columnX(col), r.y, table.widths[col], r.h);
+        r = Rect(r.x + table.columnX(col), r.y, table.span(col), r.h);
     }
 
     /// Click sorts by the `i`th shown column, focus makes it current.
@@ -656,7 +683,7 @@ private final class TableHeader(K, T) : Node, AccessParts
         foreach (size_t i; table.shown.peek)
         {
             float l = table.columnX(i);
-            if (lx >= l && lx < l + table.widths[i])
+            if (lx >= l && lx < l + table.span(i))
             {
                 return i;
             }
@@ -672,7 +699,7 @@ private final class TableHeader(K, T) : Node, AccessParts
         ptrdiff_t found = -1;
         foreach (size_t i; table.shown.peek)
         {
-            float r = table.columnX(i) + table.widths[i];
+            float r = table.columnX(i) + table.span(i);
             if (lx >= r - grip && lx <= r + grip)
             {
                 found = i;
@@ -688,7 +715,7 @@ private final class TableHeader(K, T) : Node, AccessParts
         size_t slot = 0;
         foreach (size_t i; table.shown.peek)
         {
-            if (i != pressedOn && table.columnX(i) + table.widths[i] / 2 < lx)
+            if (i != pressedOn && table.columnX(i) + table.span(i) / 2 < lx)
             {
                 ++slot;
             }
@@ -712,7 +739,7 @@ private final class TableHeader(K, T) : Node, AccessParts
                 return table.columnX(i);
             }
             ++n;
-            end = table.columnX(i) + table.widths[i];
+            end = table.columnX(i) + table.span(i);
         }
         return end;
     }
@@ -740,7 +767,7 @@ private final class TableHeader(K, T) : Node, AccessParts
             foreach (size_t i; table.shown.peek)
             {
                 TableColumn!T c = table.columns[i];
-                Rect col = Rect(origin.x + table.columnX(i), origin.y, table.widths[i], size.h);
+                Rect col = Rect(origin.x + table.columnX(i), origin.y, table.span(i), size.h);
                 if (col.right < r.x || col.x > r.right)
                 {
                     continue;
@@ -821,7 +848,8 @@ private final class TableHeader(K, T) : Node, AccessParts
             if (hotEdge >= 0)
             {
                 resizing = hotEdge;
-                startW = table.widths[resizing];
+                startW = table.span(resizing);
+                startSet = table.widths[resizing];
             }
             else
             {
@@ -835,6 +863,10 @@ private final class TableHeader(K, T) : Node, AccessParts
         case PointerKind.up:
             if (resizing >= 0)
             {
+                if (table.widths[resizing] != startSet && table.onColumns !is null)
+                {
+                    table.onColumns();
+                }
                 resizing = -1;
                 markNeedsPaint();
                 return true;
@@ -842,7 +874,7 @@ private final class TableHeader(K, T) : Node, AccessParts
             ptrdiff_t col = columnAt(e.pos.x);
             if (moving)
             {
-                table.moveColumn(pressedOn, dropSlot);
+                table.byUser(() { table.moveColumn(pressedOn, dropSlot); });
             }
             else if (pressedOn >= 0 && col == pressedOn && hovered)
             {
@@ -855,7 +887,8 @@ private final class TableHeader(K, T) : Node, AccessParts
         case PointerKind.cancel:
             if (resizing >= 0)
             {
-                table.setWidth(resizing, startW);
+                table.widths[resizing] = startSet;
+                table.columnsMoved();
             }
             resizing = -1;
             moving = false;
@@ -929,11 +962,11 @@ private final class TableHeader(K, T) : Node, AccessParts
             return true;
         case Mod.ctrl:
             float step = tree.style!TableStyle().keyResize;
-            table.setWidth(at, table.widths[at] + (left ? -step : step));
+            table.byUser(() { table.setWidth(at, table.span(at) + (left ? -step : step)); });
             show(at);
             return true;
         case Mod.alt:
-            table.moveColumn(at, left ? max(0, slot - 1) : slot + 1);
+            table.byUser(() { table.moveColumn(at, left ? max(0, slot - 1) : slot + 1); });
             show(at);
             return true;
         default:
@@ -946,7 +979,7 @@ private final class TableHeader(K, T) : Node, AccessParts
     {
         current = i;
         float l = table.columnX(i);
-        float r = l + table.widths[i];
+        float r = l + table.span(i);
         if (l < 0)
         {
             table.scrollXTo(table.scrollX + l);
@@ -1041,7 +1074,7 @@ private final class TableRow(K, T) : Node, AccessPartTree
             a.label = nodeText(children[col]);
         }
         a.allow(AccessAction.click);
-        r = Rect(r.x + table.columnX(col), r.y, table.widths[col], r.h);
+        r = Rect(r.x + table.columnX(col), r.y, table.span(col), r.h);
     }
 
     /// Click selects the row.
@@ -1082,7 +1115,7 @@ private final class TableRow(K, T) : Node, AccessPartTree
         float tallest = 0;
         foreach (size_t i; table.shown.peek)
         {
-            float room = max(0f, table.widths[i] - s.padX * 2);
+            float room = max(0f, table.span(i) - s.padX * 2);
             tallest = max(tallest, children[i].layout(Constraints(0, room, 0, float.infinity)).h);
         }
         foreach (size_t i; table.shown.peek)
@@ -1096,7 +1129,7 @@ private final class TableRow(K, T) : Node, AccessPartTree
     /// Rect of column `i` when the row sits at `origin`.
     private Rect columnRect(size_t i, Point origin)
     {
-        return Rect(origin.x + table.columnX(i), origin.y, table.widths[i], size.h);
+        return Rect(origin.x + table.columnX(i), origin.y, table.span(i), size.h);
     }
 
     /// Background for the state, then each cell clipped to its column.
@@ -1193,10 +1226,11 @@ struct TableSpec(K, T)
     void delegate(T) onActivate; /// runs on Enter or a double click on a row
     string delegate(T) text;     /// row text for typing to select, or null
     Signal!(K[]) multi;          /// selected keys when more than one may be, or null
+    bool stretchLast;            /// last shown column fills the leftover width
 
     /// Stores the options. Needed because `opCall` hides the struct literal.
     this(T[] delegate() items, K delegate(T) key, Signal!K selected, void delegate(T) onActivate,
-        string delegate(T) text, Signal!(K[]) multi)
+        string delegate(T) text, Signal!(K[]) multi, bool stretchLast)
     {
         this.text = text;
         this.multi = multi;
@@ -1204,12 +1238,14 @@ struct TableSpec(K, T)
         this.key = key;
         this.selected = selected;
         this.onActivate = onActivate;
+        this.stretchLast = stretchLast;
     }
 
     /// The table with `columns`. Its scopes belong to the current owner.
     Table!(K, T) opCall(TableColumn!T[] columns...)
     {
         Table!(K, T) t = new Table!(K, T)(items, key, columns.dup, selected, onActivate);
+        t.stretchLast = stretchLast;
         t.list = virtualList!(K, T)(&t.sorted, key, (T delegate() it) => new TableRow!(K, T)(t, it),
             selected, onActivate, text, multi);
         t.list.accessRole = Role.none;
@@ -1229,11 +1265,15 @@ struct TableSpec(K, T)
 /// Table of `items` keyed by `key`, one Tab stop moving `selected` with the arrow keys:
 /// `table(items: () => procs.get, key: (Proc p) => p.pid, selected: sel)(tableColumn(...), ...)`. With `text`
 /// typing selects the next row, in shown order, whose text starts with the typed letters. With `multi` more than
-/// one row may be selected, see `VirtualList.setMultiple`.
+/// one row may be selected, see `VirtualList.setMultiple`. With `stretchLast` the last shown column grows to fill
+/// a wider table, its set width staying the least it shows.
+///
+/// NOTE: `multi` stays last, DMD 2.110 fails to infer `K` when a later parameter is named and `multi` is skipped.
 TableSpec!(K, T) table(K, T)(T[] delegate() items, K delegate(T) key, Signal!K selected,
-    void delegate(T) onActivate = null, string delegate(T) text = null, Signal!(K[]) multi = null)
+    void delegate(T) onActivate = null, string delegate(T) text = null, bool stretchLast = false,
+    Signal!(K[]) multi = null)
 {
-    return TableSpec!(K, T)(items, key, selected, onActivate, text, multi);
+    return TableSpec!(K, T)(items, key, selected, onActivate, text, multi, stretchLast);
 }
 
 version (unittest)
@@ -1601,4 +1641,69 @@ unittest
     Rect hb = t.head.bounds;
     swipe(Point(hb.x + 300 - 52, hb.y + hb.h / 2), 30);
     assert(t.width(0) == 330 && t.scrolledX == 52, "the header keeps sideways drags");
+}
+
+// With `stretchLast` the last shown column fills the table and gives its room back when the table narrows, and
+// `onColumns` runs once per user change, not for method calls.
+unittest
+{
+    import dentrite.host : Host;
+    import dentrite.widgets.label : label;
+    import dentrite.widgets.menu : menuHost;
+
+    Host h = menuHost(300, 200);
+    scope (exit)
+    {
+        h.close();
+    }
+    Planet[] planets = [Planet("Mars", 2), Planet("Earth", 1)];
+    int changes;
+    Table!(string, Planet) t = table(items: () => planets, key: (Planet p) => p.name, selected: signal(""),
+        stretchLast: true)(
+        tableColumn("Name", (Planet delegate() p) => label(() => p().name), width: 120),
+        tableColumn("Notes", (Planet delegate() p) => label("-"), width: 60),
+    );
+    t.onColumns = () { ++changes; };
+    h.setRoot(t);
+    h.frame();
+    Rect hb = t.head.bounds;
+    /// Press at table x `from`, move to `to` and release, then a frame.
+    void drag(float from, float to)
+    {
+        Point a = Point(hb.x + from, hb.y + hb.h / 2);
+        Point b = Point(hb.x + to, a.y);
+        h.inject(PointerKind.move, a);
+        h.inject(PointerKind.down, a);
+        h.inject(PointerKind.move, Point((a.x + b.x) / 2, a.y));
+        h.inject(PointerKind.move, b);
+        h.inject(PointerKind.up, b);
+        h.frame();
+    }
+
+    assert(t.width(1) == 60 && t.span(1) == 180 && t.scrolledX == 0, "Notes fills the rest");
+    Node row = t.list.children[0];
+    assert(row.children[1].size.w <= 180 - TableStyle.init.padX * 2);
+    t.setWidth(0, 200);
+    h.frame();
+    assert(t.span(1) == 100 && changes == 0, "it gives room back, a method call does not count");
+
+    drag(200, 150);
+    assert(t.width(0) == 150 && t.span(1) == 150 && changes == 1, "a resize drag counts once");
+    drag(300 - 1, 360);
+    assert(t.width(1) == 211 && t.totalWidth == 361 && changes == 2, "the last edge grows past the table");
+
+    t.setWidth(1, 60);
+    h.frame();
+    drag(10, 290);
+    assert(t.shownColumns == [1, 0] && changes == 3, "a move counts");
+    assert(t.span(1) == 60 && t.span(0) == 240, "the new last column fills");
+    t.moveColumn(0, 0);
+    assert(changes == 3);
+
+    h.setFocus(t.head);
+    h.injectKey(Key.home);
+    h.injectKey(Key.right, Mod.ctrl);
+    assert(changes == 4, "a key resize counts");
+    h.injectKey(Key.left, Mod.alt);
+    assert(changes == 4, "a move past the end does not");
 }
