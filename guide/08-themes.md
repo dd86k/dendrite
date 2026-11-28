@@ -14,6 +14,7 @@ copy of the gallery's theme.
 gray.900 = #17171a
 blue.500 = #3b82f6
 accent = blue.500
+accent.hover = mix(accent, #ffffff, 15%)
 
 [button]
 fill = gray.800
@@ -21,6 +22,7 @@ radius = 4
 
 [button.primary]
 fill = accent
+fillHover = accent.hover
 
 [text.mono]
 font = mono
@@ -34,9 +36,11 @@ features = slashedZero | noContextual
 - `[section.variant]` overrides fields for one variant. A variant starts
   from the base section, which starts from the struct defaults, then takes
   the variant's defaults in code, then this section.
-- Colors are `#rrggbb`, `#rrggbbaa` or a palette token. Other values are D
-  literals: numbers, `true`, enum members such as `uiStrong`. Flags join
-  members with `|`.
+- Colors are `#rrggbb`, `#rrggbbaa` or a palette token. `mix(a, b, N%)`
+  moves `a` N% toward `b` and `fade(a, N%)` scales its alpha, as
+  `Color.mix` and `Color.fade` do in code. They nest and take tokens.
+  Other values are D literals: numbers, `true`, enum members such as
+  `uiStrong`. Flags join members with `|`.
 - `features` on `[text]`, `[textbox]` and `[textarea]` turns OpenType
   features on and off, such as `tabular`, `fractions` or `noLigatures`. The
   members are in `Features` in `dentrite.text`.

@@ -4,13 +4,15 @@
 /// variant, then `[button.danger]` overrides fields for one variant. A struct
 /// with `static void applyVariant(ref T, string)` gives its variants a look of
 /// their own without a theme, applied between the two. An app adds variants of
-/// its own with `Variants`. Colors are `#rrggbb`, `#rrggbbaa` or a
-/// palette token, flags are enum members joined by `|`, other values are D
-/// literals. The same code runs at compile time over a string import.
+/// its own with `Variants`. Colors are `#rrggbb`, `#rrggbbaa`, a palette
+/// token, `mix(a, b, N%)` toward `b` or `fade(a, N%)` of the alpha, see
+/// `Color.mix` and `Color.fade`. Flags are enum members joined by `|`, other
+/// values are D literals. The same code runs at compile time over a string
+/// import.
 module dentrite.theme;
 
 import std.algorithm.iteration : splitter;
-import std.algorithm.searching : all, startsWith;
+import std.algorithm.searching : all, endsWith, startsWith;
 import std.ascii : isHexDigit;
 import std.conv : ConvException, to;
 import std.format : format;
@@ -63,12 +65,18 @@ Section[] parseSections(string text, string file)
     return sections;
 }
 
-/// Color of entry `e`: `#rrggbb`, `#rrggbbaa` or a token of `palette`.
+/// Color of entry `e`: `#rrggbb`, `#rrggbbaa`, a token of `palette`, `mix(a, b, N%)` or `fade(a, N%)`.
 Color colorOf(const Entry e, const Color[string] palette, string file)
 {
-    if (e.value.startsWith("#"))
+    return colorOf(e.value, palette, file, e.line);
+}
+
+/// Color written as `value` on line `line`, function arguments included.
+private Color colorOf(string value, const Color[string] palette, string file, size_t line)
+{
+    if (value.startsWith("#"))
     {
-        string hex = e.value[1 .. $];
+        string hex = value[1 .. $];
         if ((hex.length == 6 || hex.length == 8) && hex.all!isHexDigit)
         {
             uint n = to!uint(hex, 16);
@@ -78,13 +86,84 @@ Color colorOf(const Entry e, const Color[string] palette, string file)
             }
             return Color(cast(ubyte)(n >> 24), cast(ubyte)(n >> 16), cast(ubyte)(n >> 8), cast(ubyte) n);
         }
-        throw new Exception(format("%s(%d): bad color %s, expected #rrggbb or #rrggbbaa", file, e.line, e.value));
+        throw new Exception(format("%s(%d): bad color %s, expected #rrggbb or #rrggbbaa", file, line, value));
     }
-    if (const(Color)* c = e.value in palette)
+    ptrdiff_t open = value.indexOf('(');
+    if (open > 0 && value.endsWith(")"))
+    {
+        string name = value[0 .. open].strip;
+        string[] args = splitArgs(value[open + 1 .. $ - 1]);
+        switch (name)
+        {
+        case "mix":
+            if (args.length != 3)
+            {
+                throw new Exception(format("%s(%d): bad color %s, expected mix(color, color, N%%)", file, line,
+                    value));
+            }
+            return colorOf(args[0], palette, file, line).mix(colorOf(args[1], palette, file, line),
+                percentOf(args[2], file, line));
+        case "fade":
+            if (args.length != 2)
+            {
+                throw new Exception(format("%s(%d): bad color %s, expected fade(color, N%%)", file, line, value));
+            }
+            return colorOf(args[0], palette, file, line).fade(percentOf(args[1], file, line));
+        default:
+            throw new Exception(format("%s(%d): no color function %s, expected mix or fade", file, line, name));
+        }
+    }
+    if (const(Color)* c = value in palette)
     {
         return *c;
     }
-    throw new Exception(format("%s(%d): no palette token %s", file, e.line, e.value));
+    throw new Exception(format("%s(%d): no palette token %s", file, line, value));
+}
+
+/// Arguments of a color function, split at the commas outside nested calls and stripped.
+private string[] splitArgs(string s)
+{
+    string[] args;
+    int depth;
+    size_t start;
+    foreach (size_t i, char ch; s)
+    {
+        if (ch == '(')
+        {
+            ++depth;
+        }
+        else if (ch == ')')
+        {
+            --depth;
+        }
+        else if (ch == ',' && depth == 0)
+        {
+            args ~= s[start .. i].strip;
+            start = i + 1;
+        }
+    }
+    args ~= s[start .. $].strip;
+    return args;
+}
+
+/// `N%` as a fraction from 0 to 1. Throws on anything else.
+private float percentOf(string s, string file, size_t line)
+{
+    if (s.endsWith("%"))
+    {
+        try
+        {
+            float f = to!float(s[0 .. $ - 1].strip);
+            if (f >= 0 && f <= 100)
+            {
+                return f / 100;
+            }
+        }
+        catch (ConvException)
+        {
+        }
+    }
+    throw new Exception(format("%s(%d): bad amount %s, expected 0%% to 100%%", file, line, s));
 }
 
 /// Tokens of the `[palette]` sections. A token may name one defined above it.
@@ -461,4 +540,31 @@ unittest
     assert(t.style!Probe("loud").lines == Lines.none);
     assert(thrown({ new Theme(sample ~ "[probe]\nlines = under | dots\n", "t.theme").check!Probe(); })
         == "t.theme(15): under | dots is not a Lines");
+}
+
+// Colors can mix two colors and fade the alpha, nested and over palette tokens, at run time and compile time.
+unittest
+{
+    enum string text = sample ~ "[palette]\nwhite = #ffffff\nhover = mix(gray.900, white, 50%)\n"
+        ~ "drop = fade(mix(#000000, white, 100%), 25%)\n[probe.quiet]\nink = fade(shadow, 50%)\n";
+    Theme t = new Theme(text, "t.theme");
+    assert(t.palette["hover"] == Color(0x8e, 0x8e, 0x90, 0xff));
+    assert(t.palette["drop"] == Color(0xff, 0xff, 0xff, 0x40));
+    assert(t.style!Probe("quiet").ink == Color(0, 0, 0, 0x40), "fade scales an alpha already below full");
+    static assert(loadStyle!Probe(text, "t.theme", "quiet").ink == Color(0, 0, 0, 0x40));
+
+    /// Error of loading `sample` with `extra` appended.
+    string error(string extra)
+    {
+        return thrown({ new Theme(sample ~ extra, "t.theme").check!Probe(); });
+    }
+
+    assert(error("[probe]\nink = mix(ink, ink)\n") == "t.theme(15): bad color mix(ink, ink), expected mix(color, "
+        ~ "color, N%)");
+    assert(error("[probe]\nink = fade(ink)\n") == "t.theme(15): bad color fade(ink), expected fade(color, N%)");
+    assert(error("[probe]\nink = fade(ink, 0.5)\n") == "t.theme(15): bad amount 0.5, expected 0% to 100%");
+    assert(error("[probe]\nink = fade(ink, 120%)\n") == "t.theme(15): bad amount 120%, expected 0% to 100%");
+    assert(error("[probe]\nink = mix(ink, inc, 5%)\n") == "t.theme(15): no palette token inc");
+    assert(error("[probe]\nink = lighten(ink, 5%)\n") == "t.theme(15): no color function lighten, expected mix "
+        ~ "or fade");
 }
