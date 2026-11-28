@@ -835,6 +835,7 @@ private enum Drag
     tab,      /// a tab, to dock elsewhere or float
     window,   /// a floating window, by its tab bar
     resize,   /// a floating window, by its border
+    keys,     /// a pane, by the arrow keys, see `DockView.startMove`
 }
 
 /// Where a dragged pane would land.
@@ -894,7 +895,8 @@ private enum float edgeIn = 2;
 /// Dragging a tab shows drop buttons over the stack under the pointer and near the sides of the main area.
 /// Dropping on a button docks the pane there, on a tab bar inserts the tab, anywhere else floats the pane in
 /// a window inside the view. A floating window moves by its tab bar, or by its tab when it holds one pane,
-/// which also docks it. It resizes by its border. Escape cancels a drag.
+/// which also docks it. It resizes by its border. Escape cancels a drag. `startMove` docks a pane by the arrow keys
+/// instead, `shiftTab` reorders tabs.
 final class DockView : Node, WindowKeys, AccessPartTree
 {
     DockSpace space;       /// dock layout shown
@@ -903,8 +905,8 @@ final class DockView : Node, WindowKeys, AccessPartTree
     /// Shown pane of the focused stack, the one holding keyboard focus or pressed last, null when no pane shows.
     /// Change it with `select`.
     Signal!string current;
-    /// Runs after the user drops a tab, floats a pane, drags a splitter, or moves or resizes a floating window.
-    /// Not for method calls or tab choices, see `current` for those.
+    /// Runs after the user drops a tab, floats a pane, drags a splitter, moves or resizes a floating window, or ends
+    /// a keyboard move with Enter. Not for other method calls or tab choices, see `current` for those.
     void delegate() onLayout;
     /// Runs when the user asks to close a pane, by its close button or a middle click on its tab. Removing it is
     /// up to the app, through `removePane`, at once or after asking about unsaved changes. Null for no close
@@ -943,6 +945,8 @@ final class DockView : Node, WindowKeys, AccessPartTree
     private DockHit closing;     /// tab whose close button or middle button is pressed, `Kind.none` for none
     private ubyte closingButton; /// button pressed on `closing`
     private string closingPane;  /// pane of `closing`
+    private DockNode aim;        /// stack a keyboard move is at
+    private Node keptFocus;      /// keyboard focus before a keyboard move, given back after
 
     /// Creates a view of `space` showing `panes`.
     this(DockSpace space, Node[string] panes, string[string] titles)
@@ -1155,6 +1159,68 @@ final class DockView : Node, WindowKeys, AccessPartTree
         markNeedsLayout();
     }
 
+    /// Starts moving `pane`, the shown pane of the focused stack when null, by keyboard. The arrow keys pick a drop
+    /// button: a side of the stack, then the next stack that way, then a side of the main area. Enter docks the pane
+    /// there and runs `onLayout`, Escape or a press cancels. The view holds keyboard focus meanwhile and gives it
+    /// back after. False when the pane is missing or a drag is on.
+    bool startMove(string pane = null)
+    {
+        if (pane is null)
+        {
+            pane = current.get;
+        }
+        DockNode st = pane is null ? null : space.find(pane);
+        if (st is null || mode != Drag.none || tree is null)
+        {
+            return false;
+        }
+        mode = Drag.keys;
+        moving = pane;
+        setHot(DockHit.init);
+        aimAt(st, Zone.center);
+        if (tree.services !is null)
+        {
+            keptFocus = tree.services.focused();
+            tree.services.setFocus(this);
+        }
+        return true;
+    }
+
+    /// True during a keyboard move, see `startMove`.
+    bool movingByKeys() const
+    {
+        return mode == Drag.keys;
+    }
+
+    /// Moves the tab of `pane`, the shown pane of the focused stack when null, `by` places along its tab bar,
+    /// stopping at the ends. The shown tab stays. False when nothing moved. Does not run `onLayout`.
+    bool shiftTab(int by, string pane = null)
+    {
+        import std.algorithm.comparison : clamp;
+
+        if (pane is null)
+        {
+            pane = current.get;
+        }
+        DockNode st = pane is null ? null : space.find(pane);
+        if (st is null || mode != Drag.none)
+        {
+            return false;
+        }
+        ptrdiff_t i = countUntil(st.panes, pane);
+        ptrdiff_t j = clamp(i + by, 0, cast(ptrdiff_t) st.panes.length - 1);
+        if (j == i)
+        {
+            return false;
+        }
+        string shown = st.panes[st.active];
+        space.move(pane, st, j > i ? j + 1 : j);
+        st.active = countUntil(st.panes, shown);
+        sync();
+        markNeedsLayout();
+        return true;
+    }
+
     /// Stack under window point `p`, floating windows first, or null, such as for where a dropped file goes.
     DockNode stackAt(Point p)
     {
@@ -1279,6 +1345,161 @@ final class DockView : Node, WindowKeys, AccessPartTree
         {
             reader.dispose();
             reader = null;
+        }
+    }
+
+    /// Arrow keys, Enter and Escape during a keyboard move, see `startMove`. Takes every other key meanwhile.
+    override bool onKey(ref const KeyEvent e)
+    {
+        if (mode != Drag.keys)
+        {
+            return false;
+        }
+        switch (e.key)
+        {
+        case Key.left:
+            stepMove(Zone.left);
+            break;
+        case Key.right:
+            stepMove(Zone.right);
+            break;
+        case Key.up:
+            stepMove(Zone.top);
+            break;
+        case Key.down:
+            stepMove(Zone.bottom);
+            break;
+        case Key.enter:
+            endMove();
+            break;
+        case Key.escape:
+            reset();
+            break;
+        default:
+            break;
+        }
+        return true;
+    }
+
+    /// Losing keyboard focus cancels a keyboard move.
+    override void onFocus(bool gained)
+    {
+        if (gained == false && mode == Drag.keys)
+        {
+            keptFocus = null;
+            reset();
+        }
+    }
+
+    /// Points a keyboard move at the drop button for `z` over `st`, or at no drop when `st` lacks it.
+    private void aimAt(DockNode st, Zone z)
+    {
+        aim = st;
+        guided = st.panes == [moving] ? null : st;
+        drop = guided !is null && offers(st, z) ? Drop(Drop.Kind.zone, st, z) : Drop.init;
+        markNeedsPaint();
+    }
+
+    /// True if `st` shows a drop button for `z` while moving a pane.
+    private bool offers(DockNode st, Zone z)
+    {
+        DockStyle s = tree.style!DockStyle();
+        foreach (Guide g; stackGuides(st, s))
+        {
+            if (g.zone == z)
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /// Steps a keyboard move toward side `d`: from the center of a stack to its side `d`, from there to the next
+    /// stack that way, past the last one to side `d` of the main area. The other way leads back to the center.
+    private void stepMove(Zone d)
+    {
+        Zone back = d == Zone.left ? Zone.right : d == Zone.right ? Zone.left : d == Zone.top ? Zone.bottom
+            : Zone.top;
+        if (drop.kind == Drop.Kind.outer)
+        {
+            if (drop.zone == back)
+            {
+                aimAt(aim, Zone.center);
+            }
+            else
+            {
+                drop = Drop(Drop.Kind.outer, null, d);
+                markNeedsPaint();
+            }
+            return;
+        }
+        Zone z = drop.kind == Drop.Kind.zone ? drop.zone : Zone.center;
+        if (z == back)
+        {
+            aimAt(aim, Zone.center);
+        }
+        else if (z != d && guided !is null && offers(aim, d))
+        {
+            aimAt(aim, d);
+        }
+        else if (DockNode n = neighbor(aim, d))
+        {
+            aimAt(n, Zone.center);
+        }
+        else
+        {
+            drop = Drop(Drop.Kind.outer, null, d);
+            markNeedsPaint();
+        }
+    }
+
+    /// Nearest stack past side `d` of `from` and level with it, or null.
+    private DockNode neighbor(DockNode from, Zone d)
+    {
+        import std.math : abs;
+
+        bool across = d == Zone.left || d == Zone.right;
+        bool ahead = d == Zone.right || d == Zone.bottom;
+        Rect a = from.rect;
+        DockNode best;
+        float[2] bestKey;
+        foreach (DockNode c; space.stacks())
+        {
+            Rect r = c.rect;
+            float lead = across ? r.x + r.w / 2 - (a.x + a.w / 2) : r.y + r.h / 2 - (a.y + a.h / 2);
+            float level = across ? min(a.bottom, r.bottom) - max(a.y, r.y) : min(a.right, r.right) - max(a.x, r.x);
+            if (c is from || (ahead ? lead : -lead) <= 0 || level <= 0)
+            {
+                continue;
+            }
+            float gap = across ? (ahead ? r.x - a.right : a.x - r.right) : (ahead ? r.y - a.bottom : a.y - r.bottom);
+            float off = across ? abs(r.y + r.h / 2 - (a.y + a.h / 2)) : abs(r.x + r.w / 2 - (a.x + a.w / 2));
+            float[2] key = [max(gap, 0f), off];
+            if (best is null || key[] < bestKey[])
+            {
+                best = c;
+                bestKey = key;
+            }
+        }
+        return best;
+    }
+
+    /// Ends a keyboard move by docking the pane at the chosen drop button, if any, and runs `onLayout` then.
+    private void endMove()
+    {
+        string pane = moving;
+        bool docked = drop.kind != Drop.Kind.none;
+        if (docked)
+        {
+            land(pane, drop);
+            focus = space.find(pane);
+            sync();
+            markNeedsLayout();
+        }
+        reset();
+        if (docked && onLayout !is null)
+        {
+            onLayout();
         }
     }
 
@@ -1671,11 +1892,11 @@ final class DockView : Node, WindowKeys, AccessPartTree
         }
     }
 
-    /// While docking: the area a drop would fill or the tab insertion mark, the drop buttons, and the
-    /// dragged tab at the pointer.
+    /// While docking: the area a drop would fill, the tab insertion mark or the stack a keyboard move is at, the drop
+    /// buttons, and the dragged tab at the pointer.
     private void paintDrop(ref PaintContext ctx, Point origin, const ref DockStyle s)
     {
-        if (moving is null || (mode != Drag.tab && mode != Drag.window))
+        if (moving is null || (mode != Drag.tab && mode != Drag.window && mode != Drag.keys))
         {
             return;
         }
@@ -1700,6 +1921,10 @@ final class DockView : Node, WindowKeys, AccessPartTree
         if (area.empty == false)
         {
             ctx.list.rect(area.translate(origin), s.drop, 0, s.accent, 1);
+        }
+        else if (mode == Drag.keys && drop.kind == Drop.Kind.none)
+        {
+            ctx.list.rect(aim.rect.translate(origin), Color.init, 0, s.accent, 1);
         }
         if (guided !is null)
         {
@@ -2020,6 +2245,10 @@ final class DockView : Node, WindowKeys, AccessPartTree
             }
             return true;
         case PointerKind.down:
+            if (mode == Drag.keys)
+            {
+                reset();
+            }
             if (mode != Drag.none || closing.kind != DockHit.Kind.none)
             {
                 return true;
@@ -2242,6 +2471,8 @@ final class DockView : Node, WindowKeys, AccessPartTree
         case Drag.resize:
             resizeTo(p);
             break;
+        case Drag.keys:
+            break;
         }
     }
 
@@ -2312,6 +2543,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
         {
         case Drag.none:
         case Drag.pending:
+        case Drag.keys:
             break;
         case Drag.splitter:
             changed = grab.node.shares != dragShares;
@@ -2376,18 +2608,26 @@ final class DockView : Node, WindowKeys, AccessPartTree
         }
     }
 
-    /// Forgets the drag and hover.
+    /// Forgets the drag and hover, and gives keyboard focus back after a keyboard move.
     private void reset()
     {
+        bool keys = mode == Drag.keys;
         mode = Drag.none;
         grab = DockHit.init;
         grabWindow = null;
         moving = null;
         drop = Drop.init;
         guided = null;
+        aim = null;
         hot = DockHit.init;
         cursor = CursorShape.arrow;
         markNeedsPaint();
+        Node back = keptFocus;
+        keptFocus = null;
+        if (keys && focused && tree !is null && tree.services !is null)
+        {
+            tree.services.setFocus(back !is null && back.tree is tree ? back : null);
+        }
     }
 
     /// Updates the hovered part.
@@ -2868,6 +3108,136 @@ unittest
     h.inject(PointerKind.up, p);
     h.frame();
     assert(h.focused is ps["breakpoints"] && v.current.get == "breakpoints", "a tab click focuses its pane");
+}
+
+// The arrow keys walk a keyboard move through stack sides, neighbor stacks and the main area's sides, Enter docks.
+unittest
+{
+    DockFixture f = DockFixture.make();
+    scope (exit)
+    {
+        f.dispose();
+    }
+    int layouts;
+    f.v.onLayout = () { ++layouts; };
+    bool key(uint k)
+    {
+        KeyEvent e = KeyEvent(k);
+        bool took = f.v.onKey(e);
+        f.t.flush();
+        return took;
+    }
+
+    DockNode bw = f.v.space.find("watch");
+    DockNode source = f.v.space.find("source");
+    DockNode memory = f.v.space.find("memory");
+    assert(f.v.startMove("watch") && f.v.movingByKeys && f.v.startMove("source") == false);
+    assert(f.v.drop.kind == Drop.Kind.none && f.v.aim is bw, "no center button over its own stack");
+    key(Key.left);
+    assert(f.v.drop == Drop(Drop.Kind.zone, bw, Zone.left));
+    key(Key.left);
+    assert(f.v.drop == Drop(Drop.Kind.zone, source, Zone.center));
+    key(Key.left);
+    assert(f.v.drop == Drop(Drop.Kind.zone, source, Zone.left));
+    key(Key.left);
+    assert(f.v.drop == Drop(Drop.Kind.outer, null, Zone.left), "past the last stack");
+    key(Key.up);
+    assert(f.v.drop == Drop(Drop.Kind.outer, null, Zone.top));
+    key(Key.down);
+    assert(f.v.drop == Drop(Drop.Kind.zone, source, Zone.center), "back from the main area's side");
+    key(Key.right);
+    key(Key.right);
+    assert(f.v.aim is bw && f.v.drop.kind == Drop.Kind.none);
+    key(Key.down);
+    assert(f.v.drop == Drop(Drop.Kind.zone, bw, Zone.bottom));
+    key(Key.down);
+    assert(f.v.drop == Drop(Drop.Kind.zone, memory, Zone.center));
+    assert(key(Key.tab) && key(Key.a) && f.v.movingByKeys, "other keys are taken and ignored");
+    assert(key(Key.enter) && f.v.movingByKeys == false);
+    assert(f.v.space.find("watch") is memory && memory.panes == ["memory", "watch"] && layouts == 1);
+    assert(key(Key.left) == false, "keys pass once done");
+
+    string before = f.v.space.save().toString();
+    assert(f.v.startMove("source"));
+    assert(f.v.guided is null && f.v.aim is source, "no buttons over a stack holding only the moved pane");
+    key(Key.right);
+    assert(f.v.drop.kind == Drop.Kind.zone && f.v.drop.stack !is source);
+    key(Key.escape);
+    assert(f.v.movingByKeys == false && f.v.space.save().toString() == before && layouts == 1);
+
+    assert(f.v.startMove("source"));
+    key(Key.down);
+    assert(f.v.drop == Drop(Drop.Kind.outer, null, Zone.bottom), "next stacks are level with it");
+    key(Key.escape);
+    assert(f.v.startMove("source"));
+    key(Key.enter);
+    assert(f.v.space.save().toString() == before && layouts == 1, "Enter without a drop button");
+    assert(f.v.startMove("source"));
+    key(Key.right);
+    f.send(PointerKind.down, Point(10, 100));
+    assert(f.v.movingByKeys == false && f.v.space.save().toString() == before, "a press cancels");
+    f.send(PointerKind.up, Point(10, 100));
+}
+
+// `shiftTab` reorders a tab within its bar and keeps the shown tab.
+unittest
+{
+    DockFixture f = DockFixture.make();
+    scope (exit)
+    {
+        f.dispose();
+    }
+    DockNode bw = f.v.space.find("watch");
+    assert(f.v.shiftTab(1, "breakpoints") && bw.panes == ["watch", "breakpoints"] && bw.active == 1);
+    assert(f.v.shiftTab(1, "breakpoints") == false, "at the end");
+    f.v.activate(bw, 0);
+    assert(f.v.shiftTab(-5, "breakpoints") && bw.panes == ["breakpoints", "watch"] && bw.active == 1);
+    assert(f.v.current.get == "source" && f.v.shiftTab(1) == false, "alone in its stack");
+    assert(f.v.shiftTab(1, "missing") == false);
+}
+
+// A keyboard move holds keyboard focus and gives it back after, also to a pane it moved.
+unittest
+{
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.host : Host;
+    import dentrite.platform : WindowOptions;
+    import dentrite.widgets.button : button;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    Host h = new Host(new HeadlessPlatform(1004, 604), new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    Node[string] ps;
+    foreach (string id; ["source", "breakpoints", "watch", "memory"])
+    {
+        ps[id] = button(id);
+    }
+    DockView v = new DockView(sample(), ps, null);
+    h.setRoot(v);
+    h.frame();
+    v.select("breakpoints");
+    assert(v.startMove() && h.focused is v);
+    h.injectKey(Key.tab);
+    assert(h.focused is v && v.movingByKeys, "Tab stays in the move");
+    h.injectKey(Key.left);
+    h.injectKey(Key.left);
+    h.injectKey(Key.enter);
+    h.frame();
+    assert(v.space.find("breakpoints") is v.space.find("source") && v.current.get == "breakpoints");
+    assert(h.focused is ps["breakpoints"], "focus back on the moved pane");
+
+    v.select("memory");
+    assert(v.startMove());
+    h.injectKey(Key.escape);
+    assert(h.focused is ps["memory"] && v.movingByKeys == false);
+    assert(v.startMove());
+    h.setFocus(ps["watch"]);
+    assert(v.movingByKeys == false && h.focused is ps["watch"], "losing focus cancels");
 }
 
 // Close buttons and middle clicks ask `onCloseRequest`, which may remove the pane or keep it.

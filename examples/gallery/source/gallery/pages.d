@@ -909,7 +909,8 @@ Node dockPage(Gallery g)
     Node[string] panes = ["files": dockPane("Files", "A file tree would go here."),
         "search": dockPane("Search", "Search results would go here."),
         "editor": dockPane("Editor", "Drag a tab onto a drop button to dock it, onto a tab bar to move it there, "
-            ~ "anywhere else to float it. Escape cancels."),
+            ~ "anywhere else to float it. Escape cancels. Ctrl+Shift+M moves the focused pane by the arrow keys, "
+            ~ "Enter docks it. Ctrl+Shift+PgUp and PgDn reorder its tab."),
         "output": dockPane("Output", "Floating windows move by their tab bar and resize by their border.")];
     string[string] titles = ["files": "Files", "search": "Search", "editor": "Editor", "output": "Output"];
     DockView view = new DockView(space, panes, titles);
@@ -964,9 +965,14 @@ Node dockPage(Gallery g)
         moved.get;
         return format("%d", view.space.stacks().countUntil(stack) + 1);
     }, "muted")));
-    view.tabMenu = (string pane) => pane == "editor" ? null
-        : new Menu([menuItem("Close", () { view.removePane(pane); })]);
-    return sized(h: 420)(view);
+    view.tabMenu = (string pane) {
+        MenuItem move = menuItem("&Move", () { view.startMove(pane); });
+        return new Menu(pane == "editor" ? [move] : [move, menuItem("&Close", () { view.removePane(pane); })]);
+    };
+    Command move = command("Move pane", () { view.startMove(); }, keys: "Ctrl+Shift+M");
+    Command left = command("Tab left", () { view.shiftTab(-1); }, keys: "Ctrl+Shift+PgUp");
+    Command right = command("Tab right", () { view.shiftTab(1); }, keys: "Ctrl+Shift+PgDn");
+    return shortcuts([move, left, right], window: true)(sized(h: 420)(view));
 }
 
 /// Pane content for the dock page.

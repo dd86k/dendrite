@@ -247,7 +247,10 @@ gallery's Dock page and `examples/debugger/source/app.d`. A `DockView`:
 - takes icons, tooltips and marks for its tabs from `setTabInfo`, and a
   node for the end of each tab bar from `setTrailing`,
 - keeps panes at least `minPane` big, and floats nothing with
-  `floating = false`.
+  `floating = false`,
+- moves a pane by keyboard with `startMove`, where the arrow keys pick a
+  drop button and Enter docks, and reorders tabs with `shiftTab`, both
+  bound to commands by the app,
 - lights the stack a dragged file would go to with `fileHover` and
   `fileLeave`, called from the window's `onFileHover` and `onFileLeave`,
   and finds it again for `onFileDrop` with `stackAt`.
