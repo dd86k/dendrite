@@ -1,4 +1,4 @@
-/// Window contents without a window system: tree, input routing, focus, frame scheduling.
+/// Windows without a window system: the app they share, their trees, input routing, focus, frame scheduling.
 ///
 /// No frame runs unless something asked for one: input, a node change, a timer or
 /// a wake from another thread. A frame drains the app's hooks, relays out dirty
@@ -44,7 +44,8 @@ import dentrite.widgets.textbox : TextBoxStyle;
 import dentrite.widgets.tooltip : TooltipStyle, Tooltips;
 import dentrite.widgets.tree : TreeStyle;
 import std.algorithm.comparison : max, min;
-import std.algorithm.searching : all, any;
+import std.algorithm.mutation : remove;
+import std.algorithm.searching : all, any, canFind;
 import std.math : abs, ceil, round;
 import std.meta : AliasSeq;
 import std.stdio : stderr;
@@ -73,7 +74,7 @@ struct FrameStats
     Duration tessellate; /// time tessellating stale layers
     Duration compose;    /// time building the frame's batches from the layers
     Duration render;     /// time in the renderer
-    Duration total;      /// time for the whole frame before presenting
+    Duration total;      /// time laying out, composing and rendering the frame, the app's hooks left out
     size_t commands;     /// draw commands recorded
     int layersRecorded;  /// layers painted and tessellated
     int layersReused;    /// layers copied from their cache
@@ -99,111 +100,46 @@ private Duration millis(float ms)
     return usecs(cast(long) (ms * 1000));
 }
 
-/// Retained UI on a platform and a renderer. One per process for now.
-class Host : Services
+/// What a process shares between its windows: the platform, fonts, theme, alarms, frame hooks and the loop. Made
+/// by the main window's `Host`, reached from any window as `Host.app`.
+final class App
 {
-    Tree tree;            /// retained node tree
-    TextSystem text;      /// text system: fonts, shaping and the glyph atlas
-    Theme theme;          /// current theme
-    FrameStats stats;     /// timings of the last frame
-    bool running = true;  /// set to false to make `run` return after the current frame
+    Platform platform;   /// window system side, see `Platform`
+    Theme theme;         /// theme of every window, see `setTheme`
+    bool running = true; /// set to false to make `run` return after the current frame
     /// App work at frame start, such as draining mailboxes. Tree changes made here show in the same frame and ask
-    /// for no other, `requestFrame` still does. While the window is hidden `run` calls them with no frame after a
-    /// wake, a call or an alarm.
+    /// for no other, `Host.requestFrame` still does. While every window is hidden `run` calls them with no frame
+    /// after a wake, a call or an alarm.
     void delegate()[] beforeFrame;
-    /// Runs when the user asks to close the window, return false to keep it open. Null closes it.
-    bool delegate() onCloseRequest;
-    /// Runs with the files dropped on the window and the drop point in logical pixels.
-    void delegate(string[] paths, Point at) onFileDrop;
-    /// Runs while something is dragged over the window, with the pointer in logical pixels. Whether it holds files
-    /// shows only at the drop.
-    void delegate(Point at) onFileHover;
-    void delegate() onFileLeave; /// runs when the drag over the window leaves or ends, before `onFileDrop`
-    string screenshotPath; /// PNG file written after the next frame, then cleared
-    Platform platform;    /// window system side, see `Platform`
-    Renderer renderer;    /// renderer drawing the frames
-    Tooltips tooltips;    /// tooltip of the node under the pointer
-    AccessTree access;    /// what assistive technologies were last told
 
-    private WindowOptions opts;     /// settings
-    private FrameMesh mesh;         /// tessellated frame
-    private Compositor compositor;  /// layers to frame mesh
-    private FrameClock clock;       /// frame requests and cap
-    private Alarms alarms;          /// calls from `at` and `after`
-    private float scale = 1;        /// physical pixels per logical pixel
-    private int pixelW;             /// framebuffer width
-    private int pixelH;             /// framebuffer height
-    private Node hoverNode;         /// node under the pointer
-    private Node captureNode;       /// node that saw the press
-    private bool sliding;           /// the held press let go of its node, see `slidePress`
-    private bool holding;           /// `held` waits to see if a drag scroller takes it, see `DragScroller`
-    private PointerEvent held;      /// left press held back
-    private bool mayTake;           /// a drag scroller may take the last left press until it moves `dragStart`
-    private Point pressAt;          /// where the last left press went down
-    private bool longArmed;         /// `longFrom` may still become a long press, see `ScrollStyle.longPress`
-    private PointerEvent longFrom;  /// last touch or pen press on content with a context menu
-    private PointerSource source;   /// device of the last pointer event
-    private MonoTime pointerTime;   /// time of the last pointer event
-    private Node focusNode;         /// keyboard focus
-    private bool revealFocus;       /// scroll the focused node into view after the next layout
-    private Point mouse;            /// pointer, logical
-    private bool pointerIn;         /// pointer is over the window
-    private MonoTime frameTime;     /// start of the current frame
-    private bool hidden;            /// window hidden or minimized, `run` draws no frames
-    private bool woke;              /// a wake or call came since the hooks last ran
-    private CursorShape cursorShown; /// cursor last set on the platform
-    private bool textInputOn;       /// platform text input enabled
-    private bool fileOver;          /// something is dragged over the window, see `onFileHover`
-    private bool textHiddenOn;      /// platform text input is for a password
-    private string composing;       /// input method text not committed yet
-    private Rect inputArea;         /// caret last given to the input method
-    private bool keyboardFocus;     /// focus last moved by Tab
-    private bool closed;            /// `close` already ran
-    private AccessAdapter accessAdapter; /// platform side when `WindowOptions.accessibility` is set
-    private ulong accessFocus;      /// focus id last sent to the adapter
-    private AccessTree lookup;      /// description for `find`, apart from what the adapter was sent
-    private PopupWindows popupWindows; /// platform side of popups in windows of their own, null without
-    private Shown[] shown;          /// popups in windows of their own, bottom first
-    private uint pointerSurface;    /// surface of the last pointer event, 0 for the main window
-    private Signal!Size sizeNow;    /// window size in logical pixels, for `windowSize`
+    private WindowOptions opts;   /// main window settings, for the theme file and check
+    private immutable(ubyte)[][FontKind.max + 1] fonts; /// font file bytes per slot, with `setFont` changes
+    private FontFile[] fallbacks; /// fallback fonts in the order they are tried
+    private TextSystem[] texts;   /// text systems, one per scale in use
+    private Alarms alarms;        /// calls from `at` and `after`
+    private bool woke;            /// a wake or call came since the hooks last ran
+    private bool closed;          /// `close` already ran
+    private Host[] hosts;         /// open windows, the main one first
+    private Host pointerHost;     /// window of the last pointer event
     private Signal!ColorScheme schemeNow; /// system appearance, for `colorScheme`
-    private void delegate(string) textHandler; /// see `onText`
 
-    /// Takes over `p` and `r`, loads fonts and the theme.
-    this(Platform p, Renderer r, WindowOptions o)
+    /// Takes over `p`, loads the fonts and the theme of `o`.
+    private this(Platform p, WindowOptions o)
     {
         import std.file : readText;
 
         platform = p;
-        renderer = r;
         opts = o;
-        text = new TextSystem(fontBytes(o), fallbackFiles(o));
+        fonts = fontBytes(o);
+        fallbacks = fallbackFiles(o);
+        texts ~= new TextSystem(fonts, fallbacks);
         if (o.themePath.length > 0)
         {
             theme = new Theme(readText(o.themePath), o.themePath);
             check(theme);
         }
-        tree = new Tree(text, theme, this);
-        tree.scrollDrag = o.scrollDrag;
-        tooltips = new Tooltips(tree);
-        access = new AccessTree;
-        access.title = o.title;
-        if (o.accessibility)
-        {
-            accessAdapter = cast(AccessAdapter) p;
-        }
-        if (o.popupWindows)
-        {
-            popupWindows = cast(PopupWindows) p;
-        }
-        mesh = new FrameMesh;
-        compositor.cache = o.cachePaint;
-        clock = FrameClock(o.maxFps);
-        hidden = o.hidden;
-        sizeNow = signal(Size.init);
         Appearance look = cast(Appearance) p;
         schemeNow = signal(look is null ? ColorScheme.unknown : look.colorScheme());
-        updateSize();
     }
 
     /// Font file bytes of each slot in `o`, read from `o.fonts` where `o.fontData` has none.
@@ -230,6 +166,490 @@ class Host : Services
         return files;
     }
 
+    /// Open windows, the main one first.
+    Host[] windows()
+    {
+        return hosts.dup;
+    }
+
+    /// Closes every window, the main one last, and frees the fonts and the platform. Safe to call twice.
+    void close()
+    {
+        if (closed)
+        {
+            return;
+        }
+        closed = true;
+        foreach_reverse (Host h; hosts.dup)
+        {
+            h.closeWindow();
+        }
+        foreach (TextSystem t; texts)
+        {
+            t.dispose();
+        }
+        platform.close();
+    }
+
+    /// Forgets window `h`, which closed.
+    private void leave(Host h)
+    {
+        hosts = hosts.remove!(k => k is h);
+        if (pointerHost is h)
+        {
+            pointerHost = null;
+        }
+    }
+
+    /// Open window with `Event.window` value `id`, or null.
+    private Host hostOf(uint id)
+    {
+        foreach (Host h; hosts)
+        {
+            if (h.id == id)
+            {
+                return h;
+            }
+        }
+        return null;
+    }
+
+    /// Text system at scale `s` for window `asker`: one at that scale, else one no other window uses, rescaled,
+    /// else a new one.
+    private TextSystem textFor(float s, Host asker)
+    {
+        foreach (TextSystem t; texts)
+        {
+            if (t.ppp == s)
+            {
+                return t;
+            }
+        }
+        foreach (TextSystem t; texts)
+        {
+            if (hosts.all!(h => h is asker || h.text !is t))
+            {
+                t.setScale(s);
+                return t;
+            }
+        }
+        TextSystem t = new TextSystem(fonts, fallbacks);
+        t.setContrast(texts[0].contrast);
+        t.setScale(s);
+        texts ~= t;
+        return t;
+    }
+
+    /// Calls `fn` on the UI thread at `t`, even while every window is hidden. Tree changes it makes show in the
+    /// next frame. Call from the UI thread, the returned alarm cancels it.
+    Alarm at(MonoTime t, void delegate() fn)
+    {
+        assert(fn !is null);
+        Alarm a = new Alarm(t, fn);
+        alarms.add(a);
+        return a;
+    }
+
+    /// Calls `fn` on the UI thread once `d` passed, see `at`.
+    Alarm after(Duration d, void delegate() fn)
+    {
+        return at(MonoTime.currTime + d, fn);
+    }
+
+    /// Runs frames until `running` is set to false, the main window closes or the system asks to quit. A window
+    /// draws when it asks for a frame, not while hidden or minimized. Alarms from `at` still run, and so do the
+    /// `beforeFrame` hooks after a wake, a call or an alarm while every window is hidden.
+    void run()
+    {
+        while (running)
+        {
+            Event e;
+            MonoTime now = MonoTime.currTime;
+            if (platform.wait(e, min(alarms.timeout(now), frameTimeout(now))))
+            {
+                handle(e);
+                while (platform.wait(e, Duration.zero))
+                {
+                    handle(e);
+                }
+            }
+            MonoTime t = MonoTime.currTime;
+            bool rang = alarms.fire(t);
+            if (hosts.all!(h => h.hidden))
+            {
+                if (rang || woke)
+                {
+                    runHooks();
+                }
+            }
+            else if (hosts.any!(h => h.due(t)))
+            {
+                frame(null);
+            }
+        }
+    }
+
+    /// How long `run` may wait at `now` before a window wants a frame, `Duration.max` for none.
+    private Duration frameTimeout(MonoTime now)
+    {
+        Duration d = Duration.max;
+        foreach (Host h; hosts)
+        {
+            if (h.hidden == false)
+            {
+                d = min(d, h.clock.timeout(now));
+            }
+        }
+        return d;
+    }
+
+    /// Handles the platform events waiting now, without blocking, for loops of their own such as scripted runs.
+    void pump()
+    {
+        Event e;
+        while (platform.wait(e, Duration.zero))
+        {
+            handle(e);
+        }
+    }
+
+    /// Runs the `beforeFrame` hooks.
+    private void runHooks()
+    {
+        woke = false;
+        foreach (void delegate() hook; beforeFrame)
+        {
+            hook();
+        }
+    }
+
+    /// One frame for every window that wants one and for `forced`, even hidden, if not null: due alarms and the
+    /// hooks once, then the layout and compose of each window, then the render and present of each.
+    private void frame(Host forced)
+    {
+        MonoTime t = MonoTime.currTime;
+        Host[] due;
+        foreach (Host h; hosts)
+        {
+            if ((h is forced && h.closed == false) || h.due(t))
+            {
+                due ~= h;
+                h.beginFrame(t);
+            }
+        }
+        alarms.fire(t);
+        runHooks();
+        foreach (Host h; hosts)
+        {
+            if (due.canFind(h) == false && h.due(t))
+            {
+                due ~= h; // woken by the alarms or hooks
+                h.beginFrame(t);
+            }
+        }
+        foreach (Host h; due)
+        {
+            if (h.closed == false)
+            {
+                h.prepareFrame();
+            }
+        }
+        foreach (Host h; due)
+        {
+            if (h.closed == false)
+            {
+                h.drawFrame();
+            }
+        }
+        foreach (TextSystem s; texts)
+        {
+            s.endFrame();
+        }
+        foreach (Host h; due)
+        {
+            h.endFrame();
+        }
+    }
+
+    /// Handles one platform event: those about the whole app here, the others by the window they came from, if
+    /// still open.
+    void handle(ref const Event e)
+    {
+        switch (e.kind)
+        {
+        case EventKind.quit:
+            running = false;
+            break;
+        case EventKind.wake:
+            woke = true;
+            wantHooks();
+            break;
+        case EventKind.call:
+            woke = true;
+            if (e.call !is null)
+            {
+                e.call();
+            }
+            wantHooks();
+            break;
+        case EventKind.colorScheme:
+            if (Appearance look = cast(Appearance) platform)
+            {
+                schemeNow.set(look.colorScheme());
+                wantHooks();
+            }
+            break;
+        default:
+            Host h = hostOf(e.window);
+            if (h is null)
+            {
+                break;
+            }
+            bool pointing = e.kind == EventKind.pointer || e.kind == EventKind.wheel;
+            if (pointing && h !is pointerHost)
+            {
+                h.cursorStale = pointerHost !is null; // the cursor is shared
+                pointerHost = h;
+            }
+            h.handle(e);
+            break;
+        }
+    }
+
+    /// Asks a shown window for a frame so the hooks run, or the main one if all are hidden.
+    private void wantHooks()
+    {
+        foreach (Host h; hosts)
+        {
+            if (h.hidden == false)
+            {
+                h.requestFrame();
+                return;
+            }
+        }
+        if (hosts.length > 0)
+        {
+            hosts[0].requestFrame();
+        }
+    }
+
+    /// Runs the app's theme check, or the library's.
+    private void check(Theme t)
+    {
+        if (opts.checkTheme !is null)
+        {
+            opts.checkTheme(t);
+        }
+        else
+        {
+            t.check!LibraryStyles();
+        }
+    }
+
+    /// Reloads `WindowOptions.themePath` of the main window, keeping the old theme if the new one has errors.
+    void reloadTheme()
+    {
+        import std.file : readText;
+
+        if (opts.themePath.length == 0)
+        {
+            return;
+        }
+        try
+        {
+            setTheme(new Theme(readText(opts.themePath), opts.themePath));
+            stderr.writeln("dentrite: reloaded ", opts.themePath);
+        }
+        catch (Exception ex)
+        {
+            stderr.writeln("dentrite: theme not reloaded: ", ex.msg);
+        }
+    }
+
+    /// Checks theme `t` as a loaded one is checked and restyles every window with it. Throws on errors, keeping
+    /// the old theme. Ctrl+R still reloads `WindowOptions.themePath` over it.
+    void setTheme(Theme t)
+    {
+        check(t);
+        theme = t;
+        foreach (Host h; hosts)
+        {
+            h.tree.theme = t;
+            h.tree.restyle();
+            h.requestFrame();
+        }
+    }
+
+    /// Replaces the font of slot `kind` with font file bytes `data` and lays every window out again. Throws if
+    /// the bytes are not a font, keeping the old one.
+    void setFont(FontKind kind, immutable(ubyte)[] data)
+    {
+        texts[0].setFont(kind, data);
+        foreach (TextSystem t; texts[1 .. $])
+        {
+            t.setFont(kind, data);
+        }
+        fonts[kind] = data;
+        foreach (Host h; hosts)
+        {
+            h.tree.restyle();
+            h.requestFrame();
+        }
+    }
+
+    /// Replaces the font of slot `kind` with font file `path`. Throws if it cannot be read or is not a font.
+    void setFont(FontKind kind, string path)
+    {
+        import std.file : read;
+
+        setFont(kind, cast(immutable(ubyte)[]) read(path));
+    }
+
+    /// System light or dark appearance, `unknown` when the platform does not say. Effects reading it rerun when
+    /// the system switches.
+    ColorScheme colorScheme()
+    {
+        return schemeNow.get;
+    }
+
+    /// Opens `url` with the system's handler, such as the default browser. False if the platform cannot open
+    /// URLs or the system refused it.
+    bool openUrl(string url)
+    {
+        Urls u = cast(Urls) platform;
+        return u !is null && u.openUrl(url);
+    }
+}
+
+/// Retained UI in one top-level window: its tree, input routing, focus and frames. The first one opened on a
+/// platform is the main window, which makes the `App` the others share, see `openWindow`.
+class Host : Services
+{
+    App app;              /// fonts, theme and loop shared with the other windows
+    Tree tree;            /// retained node tree
+    TextSystem text;      /// text system at this window's scale: fonts, shaping and the glyph atlas
+    FrameStats stats;     /// timings of the last frame
+    /// Runs when the user asks to close the window, return false to keep it open. Null closes it. Closing the
+    /// main window makes `run` return.
+    bool delegate() onCloseRequest;
+    /// Runs with the files dropped on the window and the drop point in logical pixels.
+    void delegate(string[] paths, Point at) onFileDrop;
+    /// Runs while something is dragged over the window, with the pointer in logical pixels. Whether it holds files
+    /// shows only at the drop.
+    void delegate(Point at) onFileHover;
+    void delegate() onFileLeave; /// runs when the drag over the window leaves or ends, before `onFileDrop`
+    string screenshotPath; /// PNG file written after the next frame, then cleared
+    Platform platform;    /// window system side shared by every window, see `Platform`
+    PlatformWindow platformWindow; /// this window's side of the platform, `platform` itself for the main window
+    Renderer renderer;    /// renderer drawing the frames
+    Tooltips tooltips;    /// tooltip of the node under the pointer
+    AccessTree access;    /// what assistive technologies were last told
+
+    private WindowOptions opts;     /// settings
+    private FrameMesh mesh;         /// tessellated frame
+    private Compositor compositor;  /// layers to frame mesh
+    private uint id;                /// `Event.window` of this window, 0 for the main one
+    private FrameClock clock;       /// frame requests and cap
+    private float scale = 1;        /// physical pixels per logical pixel
+    private int pixelW;             /// framebuffer width
+    private int pixelH;             /// framebuffer height
+    private Node hoverNode;         /// node under the pointer
+    private Node captureNode;       /// node that saw the press
+    private bool sliding;           /// the held press let go of its node, see `slidePress`
+    private bool holding;           /// `held` waits to see if a drag scroller takes it, see `DragScroller`
+    private PointerEvent held;      /// left press held back
+    private bool mayTake;           /// a drag scroller may take the last left press until it moves `dragStart`
+    private Point pressAt;          /// where the last left press went down
+    private bool longArmed;         /// `longFrom` may still become a long press, see `ScrollStyle.longPress`
+    private PointerEvent longFrom;  /// last touch or pen press on content with a context menu
+    private PointerSource source;   /// device of the last pointer event
+    private MonoTime pointerTime;   /// time of the last pointer event
+    private Node focusNode;         /// keyboard focus
+    private bool revealFocus;       /// scroll the focused node into view after the next layout
+    private Point mouse;            /// pointer, logical
+    private bool pointerIn;         /// pointer is over the window
+    private MonoTime frameTime;     /// start of the current frame
+    private bool hidden;            /// window hidden or minimized, `run` draws no frames
+    private CursorShape cursorShown; /// cursor last set on the platform
+    private bool cursorStale;       /// another window set the shared cursor since
+    private bool missed;            /// the last frame lacked glyphs, so draw another
+    private bool textInputOn;       /// platform text input enabled
+    private bool fileOver;          /// something is dragged over the window, see `onFileHover`
+    private bool textHiddenOn;      /// platform text input is for a password
+    private string composing;       /// input method text not committed yet
+    private Rect inputArea;         /// caret last given to the input method
+    private bool keyboardFocus;     /// focus last moved by Tab
+    private bool closed;            /// `close` already ran
+    private AccessAdapter accessAdapter; /// platform side when `WindowOptions.accessibility` is set
+    private ulong accessFocus;      /// focus id last sent to the adapter
+    private AccessTree lookup;      /// description for `find`, apart from what the adapter was sent
+    private PopupWindows popupWindows; /// platform side of popups in windows of their own, null without
+    private Shown[] shown;          /// popups in windows of their own, bottom first
+    private uint pointerSurface;    /// surface of the last pointer event, 0 for the main window
+    private Signal!Size sizeNow;    /// window size in logical pixels, for `windowSize`
+    private void delegate(string) textHandler; /// see `onText`
+
+    /// Takes over `p` and `r` as the main window, loads fonts and the theme.
+    this(Platform p, Renderer r, WindowOptions o)
+    {
+        app = new App(p, o);
+        setUp(p, r, o, 0);
+    }
+
+    /// Opens a window of its own in `owner`'s app, sharing its fonts, theme, hooks and loop. Throws if the
+    /// platform cannot open windows. See `openWindow`.
+    this(Host owner, WindowOptions o)
+    {
+        import std.exception : enforce;
+
+        Windows ws = cast(Windows) owner.app.platform;
+        enforce(ws !is null, "the platform cannot open windows");
+        TopWindow w = ws.openWindow(o);
+        enforce(w !is null, "the window did not open");
+        app = owner.app;
+        setUp(w, w.renderer, o, w.id);
+    }
+
+    /// Sets up the window `w` drawn by `r`, with `Event.window` value `id`, and adds it to the app.
+    private void setUp(PlatformWindow w, Renderer r, WindowOptions o, uint id)
+    {
+        platform = app.platform;
+        platformWindow = w;
+        renderer = r;
+        opts = o;
+        this.id = id;
+        scale = scaleOf(w.metrics());
+        text = app.textFor(scale, this);
+        tree = new Tree(text, app.theme, this);
+        tree.scrollDrag = o.scrollDrag;
+        tooltips = new Tooltips(tree);
+        access = new AccessTree;
+        access.title = o.title;
+        if (o.accessibility)
+        {
+            accessAdapter = cast(AccessAdapter) w;
+        }
+        if (o.popupWindows)
+        {
+            popupWindows = cast(PopupWindows) w;
+        }
+        mesh = new FrameMesh;
+        compositor.cache = o.cachePaint;
+        clock = FrameClock(o.maxFps);
+        hidden = o.hidden;
+        sizeNow = signal(Size.init);
+        app.hosts ~= this;
+        updateSize();
+    }
+
+    /// Opens another top-level window sharing this one's app, with the title, size and window settings of `o`,
+    /// see `WindowOptions`. Throws if the platform cannot open windows. It closes with `close`, with the user's
+    /// close request unless `onCloseRequest` says no, or with the main window.
+    Host openWindow(WindowOptions o)
+    {
+        return new Host(this, o);
+    }
+
     /// Closes the window unless the GC is finalizing it, so `scope Window w = new Window(o)` cleans up.
     /// NOTE: a GC finalizer may run on any thread after the platform is gone, so it leaks instead.
     ~this()
@@ -240,8 +660,25 @@ class Host : Services
         }
     }
 
-    /// Frees the renderer, fonts and the platform. Safe to call twice.
+    /// Closes the window, its popups and renderer. For the main window, closes every other window and frees the
+    /// fonts and the platform too. Safe to call twice.
     void close()
+    {
+        if (closed)
+        {
+            return;
+        }
+        if (id == 0)
+        {
+            app.close();
+            return;
+        }
+        closeWindow();
+    }
+
+    /// Closes the popup windows, frees the renderer, leaves the app and closes the window unless it is the main
+    /// one, which the platform closes.
+    private void closeWindow()
     {
         if (closed)
         {
@@ -254,8 +691,17 @@ class Host : Services
         }
         shown = null;
         renderer.dispose();
-        text.dispose();
-        platform.close();
+        app.leave(this);
+        if (id != 0)
+        {
+            platformWindow.close();
+        }
+    }
+
+    /// True once `close` ran, such as after the user closed the window.
+    bool isClosed() const
+    {
+        return closed;
     }
 
     /// Sets the app's root node. Open popups stay open.
@@ -264,21 +710,25 @@ class Host : Services
         tree.setRoot(root);
     }
 
-    /// Reads the framebuffer size and the scale.
+    /// Scale to draw at for metrics `m`: `WindowOptions.scale`, else the display's, else 1.
+    private float scaleOf(Metrics m) const
+    {
+        float s = opts.scale > 0 ? opts.scale : m.scale;
+        return s > 0 ? s : 1;
+    }
+
+    /// Reads the framebuffer size and the scale, moving to the app's text system for a new scale.
     private void updateSize()
     {
-        Metrics m = platform.metrics();
+        Metrics m = platformWindow.metrics();
         pixelW = m.pixelW;
         pixelH = m.pixelH;
-        float s = opts.scale > 0 ? opts.scale : m.scale;
-        if (s <= 0)
-        {
-            s = 1;
-        }
+        float s = scaleOf(m);
         if (s != scale || text.ppp != s)
         {
             scale = s;
-            text.setScale(s);
+            text = app.textFor(s, this);
+            tree.text = text;
             tree.restyle();
         }
         tree.viewport = Size(pixelW / scale, pixelH / scale);
@@ -302,20 +752,34 @@ class Host : Services
         clock.requestAt(t);
     }
 
-    /// Calls `fn` on the UI thread at `t`, even while the window is hidden. Tree changes it makes show in the
-    /// next frame. Call from the UI thread, the returned alarm cancels it.
+    /// Calls `fn` on the UI thread at `t`, see `App.at`.
     Alarm at(MonoTime t, void delegate() fn)
     {
-        assert(fn !is null);
-        Alarm a = new Alarm(t, fn);
-        alarms.add(a);
-        return a;
+        return app.at(t, fn);
     }
 
-    /// Calls `fn` on the UI thread once `d` passed, see `at`.
+    /// Calls `fn` on the UI thread once `d` passed, see `App.at`.
     Alarm after(Duration d, void delegate() fn)
     {
-        return at(MonoTime.currTime + d, fn);
+        return app.after(d, fn);
+    }
+
+    /// Whether `run` goes on, false to make it return after the current frame, see `App.running`.
+    ref bool running()
+    {
+        return app.running;
+    }
+
+    /// App work at frame start, see `App.beforeFrame`.
+    ref void delegate()[] beforeFrame()
+    {
+        return app.beforeFrame;
+    }
+
+    /// Current theme, shared by every window, see `setTheme`.
+    Theme theme()
+    {
+        return app.theme;
     }
 
     /// Moves keyboard focus to `n`, or clears it.
@@ -335,7 +799,7 @@ class Host : Services
             {
                 textInputOn = false;
                 textHiddenOn = false;
-                platform.textInput(false, false);
+                platformWindow.textInput(false, false);
             }
         }
         if (old !is null)
@@ -374,7 +838,7 @@ class Host : Services
         }
         textInputOn = want;
         textHiddenOn = hidden;
-        platform.textInput(want, hidden);
+        platformWindow.textInput(want, hidden);
     }
 
     /// Clears the composition `n` shows, if it is a `Composer`.
@@ -466,66 +930,43 @@ class Host : Services
 
     // Loop
 
-    /// Runs frames until `running` is set to false, the window closes or the system asks to quit. Frames wait
-    /// while the window is hidden or minimized, alarms from `at` still run and so do the `beforeFrame` hooks after
-    /// a wake, a call or an alarm.
+    /// Runs every window until `running` is set to false, the main window closes or the system asks to quit, see
+    /// `App.run`.
     void run()
     {
-        while (running)
-        {
-            Event e;
-            MonoTime now = MonoTime.currTime;
-            if (platform.wait(e, min(alarms.timeout(now), hidden ? Duration.max : clock.timeout(now))))
-            {
-                handle(e);
-                while (platform.wait(e, Duration.zero))
-                {
-                    handle(e);
-                }
-            }
-            bool rang = alarms.fire(MonoTime.currTime);
-            if (hidden)
-            {
-                if (rang || woke)
-                {
-                    runHooks();
-                }
-            }
-            else if (clock.due(MonoTime.currTime))
-            {
-                frame();
-            }
-        }
+        app.run();
     }
 
     /// Handles the platform events waiting now, without blocking, for loops of their own such as scripted runs.
     void pump()
     {
-        Event e;
-        while (platform.wait(e, Duration.zero))
-        {
-            handle(e);
-        }
+        app.pump();
     }
 
-    /// Runs the `beforeFrame` hooks.
-    private void runHooks()
-    {
-        woke = false;
-        foreach (void delegate() hook; beforeFrame)
-        {
-            hook();
-        }
-    }
-
-    /// One frame: due alarms, hooks, layout, islands, compose, render, present.
+    /// One frame of this window, and of the others that want one: due alarms, hooks, layout, islands, compose,
+    /// render, present.
     void frame()
     {
-        frameTime = MonoTime.currTime;
-        clock.started(frameTime);
+        app.frame(this);
+    }
+
+    /// True if this window wants a frame at `t`, false while hidden.
+    private bool due(MonoTime t)
+    {
+        return closed == false && hidden == false && clock.due(t);
+    }
+
+    /// Starts a frame at `t`, before the app's alarms and hooks, where paint requests need no new frame.
+    private void beginFrame(MonoTime t)
+    {
+        frameTime = t;
+        clock.started(t);
         tree.frameStart = true;
-        alarms.fire(frameTime);
-        runHooks();
+    }
+
+    /// Lays out and composes this window's frame, after the app's alarms and hooks, ahead of any render.
+    private void prepareFrame()
+    {
         tree.firePaintTimers(frameTime);
         if (holding && frameTime - held.time >= millis(tree.style!ScrollStyle().pressDelay))
         {
@@ -584,8 +1025,8 @@ class Host : Services
         stats.batches = mesh.batches.length;
         Duration painting = compositor.painting;
         Duration tessellating = compositor.tessellating;
-        bool missed = mesh.missedGlyphs;
-        // NOTE: every mesh before any render, as composing can add atlas rows a renderer that already drew misses
+        bool missedNow = mesh.missedGlyphs;
+        // NOTE: every mesh of every window before any render, as composing can add atlas rows a renderer misses
         foreach (ref Shown s; shown)
         {
             Rect b = s.popup.bounds;
@@ -599,12 +1040,26 @@ class Host : Services
             stats.vertices += compositor.vertices;
             stats.meshBytes += compositor.meshBytes;
             stats.batches += s.mesh.batches.length;
-            missed = missed || s.mesh.missedGlyphs;
+            missedNow = missedNow || s.mesh.missedGlyphs;
         }
         tree.paintRequested = false;
         syncTextInput();
         placeInputArea();
         updateAccess();
+        MonoTime t4 = MonoTime.currTime;
+        missed = missedNow;
+        stats.layout = t1 - t0;
+        stats.islands = t2 - t1;
+        stats.paint = painting;
+        stats.tessellate = tessellating;
+        stats.compose = t4 - t2 - painting - tessellating;
+        stats.boundaries = boundaries;
+        stats.total = t4 - t0;
+    }
+
+    /// Renders the composed frame and its popups, writes a pending screenshot and presents.
+    private void drawFrame()
+    {
         MonoTime t4 = MonoTime.currTime;
         Color clear = tree.style!WindowStyle().background;
         clear.a = 0xff;
@@ -622,21 +1077,19 @@ class Host : Services
             stderr.writeln("dentrite: wrote ", screenshotPath);
             screenshotPath = null;
         }
-        platform.present();
-        text.endFrame();
+        platformWindow.present();
+        stats.frames += 1;
+        stats.render = t5 - t4;
+        stats.total += stats.render;
+    }
+
+    /// Asks for another frame if the last one lacked glyphs, after the text systems ended theirs.
+    private void endFrame()
+    {
         if (missed)
         {
             requestFrame();
         }
-        stats.frames += 1;
-        stats.layout = t1 - t0;
-        stats.islands = t2 - t1;
-        stats.paint = painting;
-        stats.tessellate = tessellating;
-        stats.compose = t4 - t2 - painting - tessellating;
-        stats.render = t5 - t4;
-        stats.total = t5 - frameTime;
-        stats.boundaries = boundaries;
     }
 
     /// Opens, moves and closes popup windows to match the popups that `Stage.place` gave windows of their own.
@@ -725,7 +1178,7 @@ class Host : Services
         if (at != inputArea)
         {
             inputArea = at;
-            platform.textInputArea(Rect(at.x * scale, at.y * scale, at.w * scale, at.h * scale));
+            platformWindow.textInputArea(Rect(at.x * scale, at.y * scale, at.w * scale, at.h * scale));
         }
     }
 
@@ -798,7 +1251,8 @@ class Host : Services
         requestFrame();
     }
 
-    /// Handles one platform event.
+    /// Handles one platform event for this window, whatever its `Event.window`. Events for the whole app, such as
+    /// `quit`, `wake` and `call`, go to `App.handle`.
     void handle(ref const Event e)
     {
         final switch (e.kind)
@@ -806,13 +1260,24 @@ class Host : Services
         case EventKind.none:
             break;
         case EventKind.close:
-            if (onCloseRequest is null || onCloseRequest())
+            if (onCloseRequest !is null && onCloseRequest() == false)
             {
-                running = false;
+                break;
+            }
+            if (id == 0)
+            {
+                app.running = false;
+            }
+            else
+            {
+                close();
             }
             break;
         case EventKind.quit:
-            running = false;
+        case EventKind.wake:
+        case EventKind.call:
+        case EventKind.colorScheme:
+            app.handle(e);
             break;
         case EventKind.resized:
             updateSize();
@@ -826,18 +1291,6 @@ class Host : Services
             break;
         case EventKind.exposed:
             hidden = false;
-            requestFrame();
-            break;
-        case EventKind.wake:
-            woke = true;
-            requestFrame();
-            break;
-        case EventKind.call:
-            woke = true;
-            if (e.call !is null)
-            {
-                e.call();
-            }
             requestFrame();
             break;
         case EventKind.pointerLeft:
@@ -914,13 +1367,6 @@ class Host : Services
             if (onFileDrop !is null && e.paths.length > 0 && fromSurface(e, dropAt))
             {
                 onFileDrop(e.paths.dup, dropAt);
-                requestFrame();
-            }
-            break;
-        case EventKind.colorScheme:
-            if (Appearance look = cast(Appearance) platform)
-            {
-                schemeNow.set(look.colorScheme());
                 requestFrame();
             }
             break;
@@ -1528,72 +1974,34 @@ class Host : Services
         requestFrame();
     }
 
-    /// Runs the app's theme check, or the library's.
-    private void check(Theme t)
-    {
-        if (opts.checkTheme !is null)
-        {
-            opts.checkTheme(t);
-        }
-        else
-        {
-            t.check!LibraryStyles();
-        }
-    }
-
-    /// Reloads the theme file, keeping the old theme if the new one has errors.
+    /// Reloads the theme file of every window, see `App.reloadTheme`.
     void reloadTheme()
     {
-        import std.file : readText;
-
-        if (opts.themePath.length == 0)
-        {
-            return;
-        }
-        try
-        {
-            setTheme(new Theme(readText(opts.themePath), opts.themePath));
-            stderr.writeln("dentrite: reloaded ", opts.themePath);
-        }
-        catch (Exception ex)
-        {
-            stderr.writeln("dentrite: theme not reloaded: ", ex.msg);
-        }
+        app.reloadTheme();
     }
 
-    /// Checks theme `t` as a loaded one is checked and restyles every node with it. Throws on errors, keeping the
-    /// old theme. Ctrl+R still reloads `WindowOptions.themePath` over it.
+    /// Restyles every window with theme `t`, see `App.setTheme`.
     void setTheme(Theme t)
     {
-        check(t);
-        theme = t;
-        tree.theme = t;
-        tree.restyle();
-        requestFrame();
+        app.setTheme(t);
     }
 
-    /// Replaces the font of slot `kind` with font file bytes `data` and lays every node out again. Throws if the
-    /// bytes are not a font, keeping the old one.
+    /// Replaces the font of slot `kind` in every window, see `App.setFont`.
     void setFont(FontKind kind, immutable(ubyte)[] data)
     {
-        text.setFont(kind, data);
-        tree.restyle();
-        requestFrame();
+        app.setFont(kind, data);
     }
 
-    /// Replaces the font of slot `kind` with font file `path`. Throws if it cannot be read or is not a font.
+    /// Replaces the font of slot `kind` in every window with font file `path`, see `App.setFont`.
     void setFont(FontKind kind, string path)
     {
-        import std.file : read;
-
-        setFont(kind, cast(immutable(ubyte)[]) read(path));
+        app.setFont(kind, path);
     }
 
-    /// System light or dark appearance, `unknown` when the platform does not say. Effects reading it rerun when
-    /// the system switches.
+    /// System light or dark appearance, see `App.colorScheme`.
     ColorScheme colorScheme()
     {
-        return schemeNow.get;
+        return app.colorScheme();
     }
 
     /// Handler for typed text the focused node did not take, or null.
@@ -1611,15 +2019,16 @@ class Host : Services
         syncTextInput();
     }
 
-    /// Sets the platform cursor for `shape` if it changed.
+    /// Sets the platform cursor for `shape` if it changed or another window set it since.
     private void showCursor(CursorShape shape)
     {
-        if (shape == cursorShown)
+        if (shape == cursorShown && cursorStale == false)
         {
             return;
         }
         cursorShown = shape;
-        platform.setCursor(shape);
+        cursorStale = false;
+        platformWindow.setCursor(shape);
     }
 
     /// Physical pixels per logical pixel.
@@ -1702,13 +2111,18 @@ class Host : Services
         }
     }
 
-    /// Shows a native file dialog: `w.fileDialog(FileDialogKind.open, (string[] paths) { ... },
+    /// Shows a native file dialog over the window: `w.fileDialog(FileDialogKind.open, (string[] paths) { ... },
     /// [FileFilter("D source", "d")])`. `done` runs later on the UI thread with the chosen paths, none if
     /// cancelled, or at once with none when the platform has no file dialogs.
     void fileDialog(FileDialogKind kind, void delegate(string[]) done, const(FileFilter)[] filters = null,
         string start = null)
     {
-        if (FileDialogs d = cast(FileDialogs) platform)
+        FileDialogs d = cast(FileDialogs) platformWindow;
+        if (d is null)
+        {
+            d = cast(FileDialogs) platform;
+        }
+        if (d !is null)
         {
             d.fileDialog(kind, filters, start, done);
         }
@@ -1718,12 +2132,10 @@ class Host : Services
         }
     }
 
-    /// Opens `url` with the system's handler, such as the default browser. False if the platform cannot open
-    /// URLs or the system refused it.
+    /// Opens `url` with the system's handler, see `App.openUrl`.
     bool openUrl(string url)
     {
-        Urls u = cast(Urls) platform;
-        return u !is null && u.openUrl(url);
+        return app.openUrl(url);
     }
 
     /// Window size in logical pixels, tracked by the running effect or computed.
@@ -1753,7 +2165,7 @@ class Host : Services
     void title(string t)
     {
         access.title = t;
-        if (WindowControl c = cast(WindowControl) platform)
+        if (WindowControl c = cast(WindowControl) platformWindow)
         {
             c.setTitle(t);
         }
@@ -1776,7 +2188,7 @@ class Host : Services
     /// True unless the window is hidden, always true when the platform cannot hide it.
     bool visible()
     {
-        WindowControl c = cast(WindowControl) platform;
+        WindowControl c = cast(WindowControl) platformWindow;
         return c is null || c.visible();
     }
 
@@ -1784,7 +2196,7 @@ class Host : Services
     /// losing focus and the pointer does.
     void visible(bool on)
     {
-        WindowControl c = cast(WindowControl) platform;
+        WindowControl c = cast(WindowControl) platformWindow;
         if (c is null || (on == false && c.visible() == false))
         {
             return;
@@ -1804,7 +2216,7 @@ class Host : Services
     /// Sets the smallest size the user can resize the window to, in logical pixels, 0 for no limit.
     void minimumSize(int w, int h)
     {
-        if (WindowControl c = cast(WindowControl) platform)
+        if (WindowControl c = cast(WindowControl) platformWindow)
         {
             c.setMinimumSize(w, h);
         }
@@ -1815,7 +2227,7 @@ class Host : Services
     void icon(Image[] sizes...)
     {
         assert(sizes.length > 0 && sizes.all!(i => i !is null && i.empty == false));
-        if (WindowControl c = cast(WindowControl) platform)
+        if (WindowControl c = cast(WindowControl) platformWindow)
         {
             c.setIcon(sizes.dup);
         }
@@ -2534,4 +2946,109 @@ unittest
     drop.pos = Point(80, 60);
     h.handle(drop);
     assert(log == ["hover 40,30", "leave", "drop /tmp/a.bin"]);
+}
+
+// A second window shares the app: events reach the window they name, each window draws and keeps its own focus,
+// hooks run once a frame, another scale gets its own text system, and closing it, or the main window, closes it.
+unittest
+{
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.containers : column;
+    import dentrite.headless : HeadlessPlatform, HeadlessWindow;
+    import dentrite.widgets.button : Button, button;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    HeadlessPlatform p = new HeadlessPlatform(200, 100);
+    Host h = new Host(p, new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    WindowOptions o2;
+    o2.title = "Two";
+    o2.width = 150;
+    o2.height = 80;
+    o2.scale = 2;
+    Host h2 = h.openWindow(o2);
+    HeadlessWindow w = p.windows[0];
+    assert(h2.app is h.app && h.app.windows == [h, h2]);
+    assert(w.title == "Two" && w.size.pixelW == 300 && h2.windowSize == Size(150, 80));
+    assert(h2.text !is h.text && h2.text.ppp == 2 && h.text.ppp == 1, "a text system per scale");
+    assert(h2.theme is h.theme);
+
+    int one;
+    int two;
+    int hooks;
+    h.beforeFrame ~= () { ++hooks; };
+    Button b1 = button("One", () { ++one; });
+    Button b2 = button("Two", () { ++two; });
+    h.setRoot(column()(b1));
+    h2.setRoot(column()(b2));
+    h.frame();
+    assert(hooks == 1 && p.presented == 1 && w.presented == 1, "one frame draws both, hooks once");
+    assert(h2.renderer.readPixels().length == 300 * 160 * 4);
+
+    Point at = Point((b2.bounds.x + 4) * 2, (b2.bounds.y + 4) * 2);
+    Event down = { kind: EventKind.pointer, window: w.id, pointer: PointerKind.down, pos: at, button: 1, clicks: 1 };
+    Event up = { kind: EventKind.pointer, window: w.id, pointer: PointerKind.up, pos: at, button: 1, clicks: 1 };
+    p.queue ~= [down, up];
+    h.pump();
+    assert(one == 0 && two == 1, "the press reaches the window it came from");
+
+    Event tab = { kind: EventKind.key, window: w.id, key: Key.tab };
+    h.app.handle(tab);
+    assert(h2.focused is b2 && h.focused is null, "focus is per window");
+    h.app.handle(tab);
+    assert(h2.focused is b2);
+
+    int asked;
+    bool allow;
+    h2.onCloseRequest = () { ++asked; return allow; };
+    Event close = { kind: EventKind.close, window: w.id };
+    h.app.handle(close);
+    assert(asked == 1 && h2.isClosed == false && w.closed == false);
+    allow = true;
+    h.app.handle(close);
+    assert(h2.isClosed && w.closed && h.app.windows == [h] && h.running, "a second window closes alone");
+    p.queue ~= [down, up];
+    h.pump();
+    assert(two == 1, "events of a closed window are dropped");
+    h.frame();
+    assert(w.presented == 1 && p.presented == 2);
+
+    Host h3 = h.openWindow(o2);
+    assert(h3.text is h2.text, "the unused text system is taken again");
+    h.close();
+    assert(h3.isClosed && p.windows[1].closed, "the main window closes the others");
+}
+
+// Without window support `openWindow` throws, and a hidden second window draws no frames while the main one does.
+unittest
+{
+    import std.exception : assertThrown;
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform, HeadlessWindow;
+
+    WindowOptions o;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    HeadlessPlatform p = new HeadlessPlatform(200, 100);
+    Host h = new Host(p, new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    p.windowless = true;
+    assertThrown(h.openWindow(o));
+    p.windowless = false;
+    WindowOptions o2;
+    o2.hidden = true;
+    Host h2 = h.openWindow(o2);
+    h.frame();
+    assert(p.presented == 1 && p.windows[0].presented == 0);
+    h2.visible = true;
+    h.frame();
+    assert(p.windows[0].presented == 1, "shown, it draws with the main window");
+    h2.frame();
+    assert(p.windows[0].presented == 2 && h2.text is h.text, "same scale, same text system");
 }

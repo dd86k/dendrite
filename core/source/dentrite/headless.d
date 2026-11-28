@@ -4,6 +4,7 @@ module dentrite.headless;
 import core.sync.semaphore : Semaphore;
 import core.time : Duration;
 import dentrite.access : AccessAdapter, AccessDemand, AccessUpdate;
+import dentrite.backend.software : SoftwareRenderer;
 import dentrite.draw : FrameMesh;
 import dentrite.geom : Rect;
 import dentrite.image : Image;
@@ -13,7 +14,7 @@ import dentrite.text : GlyphAtlas;
 
 /// Fixed size framebuffer with events queued by the app.
 final class HeadlessPlatform : Platform, FileDialogs, AccessAdapter, WindowControl, Trays, PopupWindows, Appearance,
-    Urls
+    Urls, Windows
 {
     Metrics size;        /// framebuffer size and scale
     Event[] queue;       /// events `wait` hands out, oldest first
@@ -38,6 +39,8 @@ final class HeadlessPlatform : Platform, FileDialogs, AccessAdapter, WindowContr
     ColorScheme scheme;  /// what `colorScheme` answers
     string[] urls;       /// URLs opened, oldest first
     bool urlless;        /// true to refuse every URL, as a system without a handler
+    HeadlessWindow[] windows; /// windows opened past the main one, closed ones included
+    bool windowless;     /// true to answer `openWindow` with null, as a system with one window
 
     /// Platform `w` by `h` logical pixels at `scale`.
     this(int w, int h, float scale = 1)
@@ -182,6 +185,25 @@ final class HeadlessPlatform : Platform, FileDialogs, AccessAdapter, WindowContr
         return w;
     }
 
+    /// Records a window sized and titled from `o`, at `o.scale` or the platform's, null when `windowless`.
+    TopWindow openWindow(ref const WindowOptions o)
+    {
+        if (windowless)
+        {
+            return null;
+        }
+        float k = o.scale > 0 ? o.scale : size.scale;
+        HeadlessWindow w = new HeadlessWindow;
+        w.number = cast(uint) windows.length + 1;
+        w.size = Metrics(cast(int)(o.width * k), cast(int)(o.height * k), k);
+        w.title = o.title;
+        w.hidden = o.hidden;
+        w.minSize = [o.minWidth, o.minHeight];
+        w.drawer = new SoftwareRenderer;
+        windows ~= w;
+        return w;
+    }
+
     /// Counts the frame.
     void present()
     {
@@ -229,6 +251,103 @@ final class HeadlessPlatform : Platform, FileDialogs, AccessAdapter, WindowContr
     void close()
     {
         setWaker(null);
+    }
+}
+
+/// Top-level window recorded by `HeadlessPlatform`, drawn in software. Its events carry `Event.window` set to
+/// `id`.
+final class HeadlessWindow : TopWindow, WindowControl
+{
+    Metrics size;        /// framebuffer size and scale
+    CursorShape cursor;  /// last cursor set
+    bool textOn;         /// true while text input is on
+    Rect inputArea;      /// last caret for an input method
+    int presented;       /// frames presented
+    string title;        /// last title set
+    bool hidden;         /// true while hidden
+    int[2] minSize;      /// last minimum size, width then height
+    Image[] icon;        /// last icon set, one image per size
+    bool closed;         /// true once closed
+    SoftwareRenderer drawer; /// draws its frames
+
+    private uint number; /// `id`
+
+    /// Number in `Event.window`, counting from 1.
+    uint id()
+    {
+        return number;
+    }
+
+    /// `drawer`.
+    Renderer renderer()
+    {
+        return drawer;
+    }
+
+    /// Framebuffer size and scale.
+    Metrics metrics()
+    {
+        return size;
+    }
+
+    /// Counts the frame.
+    void present()
+    {
+        ++presented;
+    }
+
+    /// Records the cursor.
+    void setCursor(CursorShape shape)
+    {
+        cursor = shape;
+    }
+
+    /// Records whether text input is on.
+    void textInput(bool on, bool hidden)
+    {
+        textOn = on;
+    }
+
+    /// Records the input method caret.
+    void textInputArea(Rect caret)
+    {
+        inputArea = caret;
+    }
+
+    /// Records the title.
+    void setTitle(string t)
+    {
+        title = t;
+    }
+
+    /// Records whether the window is shown.
+    void setVisible(bool on)
+    {
+        hidden = on == false;
+    }
+
+    /// False while hidden.
+    bool visible()
+    {
+        return hidden == false;
+    }
+
+    /// Records the minimum size.
+    void setMinimumSize(int w, int h)
+    {
+        minSize = [w, h];
+    }
+
+    /// Records the icon.
+    void setIcon(Image[] icons)
+    {
+        icon = icons;
+    }
+
+    /// Marks it closed.
+    void close()
+    {
+        closed = true;
     }
 }
 

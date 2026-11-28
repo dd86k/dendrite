@@ -4,20 +4,28 @@ module dentrite.window;
 public import dentrite.host;
 public import dentrite.platform;
 import dentrite.c.sdl : SDL_Window;
-import dentrite.sdl3 : SdlPlatform;
+import dentrite.sdl3 : SdlPlatform, SdlWindow;
 import std.stdio : stderr;
 
 /// Host on an SDL3 window. `scope Window w = new Window(o)` closes it at scope exit.
 final class Window : Host
 {
-    private SdlPlatform sdl; /// platform behind `platform`
+    private SdlWindow sdl; /// SDL side of this window
 
-    /// Opens the window with the renderer `o.renderer` names, loads fonts and the theme.
+    /// Opens the main window with the renderer `o.renderer` names, loads fonts and the theme.
     this(WindowOptions o)
     {
-        sdl = new SdlPlatform(o);
-        super(sdl, sdl.renderer, o);
+        SdlPlatform p = new SdlPlatform(o);
+        sdl = p.mainWindow;
+        super(p, p.renderer, o);
         stderr.writeln("dentrite: ", renderer.description());
+    }
+
+    /// Opens another window in `owner`'s app, drawn as the main one, see `Host.openWindow`.
+    this(Host owner, WindowOptions o)
+    {
+        super(owner, o);
+        sdl = cast(SdlWindow) platformWindow;
     }
 
     /// SDL window, for SDL calls the library does not wrap. Cast it for other SDL bindings.

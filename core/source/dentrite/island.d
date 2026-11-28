@@ -110,6 +110,7 @@ final class Island : Node, Updatable, FocusScope, Composer, AccessContent, Acces
         lastRect = r;
         ++passes;
         ui.tree.theme = tree.theme;
+        ui.tree.text = tree.text;
         ui.services = sv;
         ui.now = tree.services is null ? MonoTime.currTime : tree.services.now;
         if (tracker !is null)

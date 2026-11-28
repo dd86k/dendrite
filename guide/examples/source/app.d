@@ -19,6 +19,7 @@ import guide.signals;
 import guide.themes : GuideStyles;
 import guide.threads;
 import guide.widgets;
+import guide.windows;
 import std.algorithm.sorting : sort;
 import std.getopt : defaultGetoptPrinter, getopt, GetoptResult;
 import std.stdio : stderr;
@@ -38,6 +39,7 @@ Node delegate()[string] examples(Host h)
         "sensors": () => sensors(),
         "downloads": () => downloads(h),
         "rating": () => ratings(),
+        "windows": () => counterWithInspector(h, new Inspector),
     ];
 }
 

@@ -39,7 +39,6 @@ Design: path C of `research/report.html`, section 11.
 
 - No releases yet, the API can change.
 - Only Linux and Windows have been tested.
-- One window per process.
 
 ## Documentation
 

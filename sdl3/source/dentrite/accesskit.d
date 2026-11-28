@@ -188,6 +188,20 @@ final class AccessKitAdapter : AccessAdapter
         }
     }
 
+    /// Adapter that sent action event `s`, which may have closed since.
+    static void* sender(ref const SDL_Event s)
+    {
+        return cast(void*) s.user.data2;
+    }
+
+    /// Frees what the handler allocated for action event `s`, for an adapter closed since.
+    static void discard(ref SDL_Event s)
+    {
+        Pending* p = cast(Pending*) s.user.data1;
+        free(p.text);
+        free(p);
+    }
+
     /// Request carried by SDL user event `s` of the action event type, freeing what the handler allocated.
     AccessRequest request(ref SDL_Event s)
     {
@@ -735,5 +749,6 @@ private void asked(accesskit_action_request* r, void* userdata)
     SDL_Event e;
     e.type = a.actionEvent;
     e.user.data1 = p;
+    e.user.data2 = userdata;
     SDL_PushEvent(&e);
 }

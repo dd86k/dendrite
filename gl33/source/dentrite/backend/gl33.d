@@ -116,6 +116,9 @@ private enum ulong keepFrames = 120;
 final class GL33Renderer : Renderer
 {
     size_t bufferBytes;      /// bytes held in mesh buffers
+    /// Makes the renderer's GL context current, called before each render, `readPixels` and `dispose` when set.
+    /// For windows each with a context of their own.
+    void delegate() bind;
 
     private GLuint program;  /// UI shader
     private GLuint atlasTex; /// glyph atlas
@@ -124,6 +127,8 @@ final class GL33Renderer : Renderer
     private GLint uAtlas;    /// sampler uniform
     private int texW;        /// atlas texture width
     private int texH;        /// atlas texture height
+    private GlyphAtlas synced; /// atlas the texture holds
+    private ulong syncedTo;  /// first atlas frame whose changes the texture lacks
     private int frameW;      /// framebuffer width of the last frame
     private int frameH;      /// framebuffer height of the last frame
     private GLuint bound;    /// texture bound to unit 0
@@ -149,9 +154,19 @@ final class GL33Renderer : Renderer
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     }
 
+    /// Runs `bind` if set.
+    private void bindContext()
+    {
+        if (bind !is null)
+        {
+            bind();
+        }
+    }
+
     /// Frees GL objects.
     void dispose()
     {
+        bindContext();
         foreach (ref ImageTexture t; images)
         {
             glDeleteTextures(1, &t.id);
@@ -172,7 +187,7 @@ final class GL33Renderer : Renderer
         return fromStringz(glGetString(GL_RENDERER)).idup ~ ", GL " ~ fromStringz(glGetString(GL_VERSION)).idup;
     }
 
-    /// Uploads the atlas rows changed this frame, or all of it when new or resized.
+    /// Uploads the atlas rows changed since the last upload, or all of it when new, resized or another atlas.
     private void upload(GlyphAtlas atlas)
     {
         glBindTexture(GL_TEXTURE_2D, atlasTex);
@@ -180,13 +195,16 @@ final class GL33Renderer : Renderer
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         int top;
         int bottom;
-        atlas.dirtyRows(top, bottom);
-        if (texW != atlas.width || texH != atlas.height)
+        atlas.changedRows(syncedTo, top, bottom);
+        // NOTE: every mesh of a frame is composed before any render, so no row changes after this in the frame
+        syncedTo = atlas.frames + 1;
+        if (texW != atlas.width || texH != atlas.height || atlas !is synced)
         {
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, atlas.width, atlas.height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
                 atlas.pixels.ptr);
             texW = atlas.width;
             texH = atlas.height;
+            synced = atlas;
             return;
         }
         if (bottom > top)
@@ -221,6 +239,7 @@ final class GL33Renderer : Renderer
     /// Clears to `clear` and draws `mesh`, uploading the meshes its batches draw from if new or changed.
     void render(FrameMesh mesh, GlyphAtlas atlas, Color clear)
     {
+        bindContext();
         int w = mesh.width;
         int h = mesh.height;
         ++frame;
@@ -399,6 +418,7 @@ final class GL33Renderer : Renderer
     /// Framebuffer contents of the last frame as RGBA8 rows, top row first. Call before the swap.
     ubyte[] readPixels()
     {
+        bindContext();
         int w = frameW;
         int h = frameH;
         ubyte[] up = new ubyte[w * h * 4];

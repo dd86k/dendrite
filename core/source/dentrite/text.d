@@ -300,12 +300,14 @@ final class GlyphAtlas
     int dirtyBottom;      /// one past the last row changed this frame
     bool full;            /// true when out of space, cleared before the next frame
     uint generation;      /// bumped by `clear`, meshes made before hold stale texel coordinates
+    ulong frames;         /// frames ended so far, see `changedRows`
     enum int maxHeight = 4096; /// tallest the atlas grows, in texels
 
     private GlyphSlot[GlyphKey] slots; /// placed glyphs
     private int shelfX;   /// next free x on the current shelf
     private int shelfY;   /// top of the current shelf
     private int shelfH;   /// height of the current shelf
+    private ulong[] rowFrame; /// per texel row, the value of `frames` when it last changed
 
     /// Creates an empty atlas `width` texels wide.
     this(int width = 1024, int height = 1024)
@@ -320,6 +322,8 @@ final class GlyphAtlas
     {
         ++generation;
         pixels = new ubyte[width * height * 4];
+        rowFrame = new ulong[height];
+        rowFrame[] = frames;
         slots = null;
         pixels[0 .. 4 * 4] = 0xff;
         foreach (int y; 0 .. 4)
@@ -414,6 +418,7 @@ final class GlyphAtlas
         shelfH = max(shelfH, h + 1);
         dirtyTop = min(dirtyTop, y);
         dirtyBottom = max(dirtyBottom, y + h);
+        rowFrame[y .. y + h] = frames;
         slots[key] = GlyphSlot(cast(short) x, cast(short) y, cast(short) w, cast(short) h,
             cast(short) left, cast(short) top, color);
         return key in slots;
@@ -424,6 +429,9 @@ final class GlyphAtlas
     {
         height *= 2;
         pixels.length = width * height * 4;
+        size_t old = rowFrame.length;
+        rowFrame.length = height;
+        rowFrame[old .. $] = frames;
     }
 
     /// Rows changed this frame as `[top, bottom)`, empty when clean. Every renderer drawing this frame reads them.
@@ -433,9 +441,29 @@ final class GlyphAtlas
         bottom = dirtyTop == int.max ? 0 : dirtyBottom;
     }
 
+    /// Rows changed since frame `since` of `frames`, this one included, as `[top, bottom)`, empty when clean. For a
+    /// renderer that skips frames, such as one of a window drawn less often.
+    void changedRows(ulong since, out int top, out int bottom) const
+    {
+        top = height;
+        foreach (int y; 0 .. height)
+        {
+            if (rowFrame[y] >= since)
+            {
+                top = min(top, y);
+                bottom = y + 1;
+            }
+        }
+        if (bottom == 0)
+        {
+            top = 0;
+        }
+    }
+
     /// Starts a frame with no changed rows, once every renderer drew.
     void endFrame()
     {
+        ++frames;
         dirtyTop = int.max;
         dirtyBottom = 0;
     }
@@ -1170,8 +1198,13 @@ unittest
     int again;
     small.dirtyRows(again, bottom);
     assert(top > 0 && again == top && bottom == top + 10, "rows stay for every renderer of the frame");
+    ulong drewAt = small.frames;
     small.endFrame();
     small.dirtyRows(top, bottom);
+    assert(top == bottom);
+    small.changedRows(drewAt, top, bottom);
+    assert(top == again && bottom == again + 10, "a renderer that skipped a frame still sees its rows");
+    small.changedRows(drewAt + 1, top, bottom);
     assert(top == bottom);
     int pen;
     assert(subpixel(10.3, pen) == 1 && pen == 10);

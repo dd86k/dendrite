@@ -15,6 +15,7 @@ part in between: how the pieces fit, in the order you meet them.
 9. [Threads](09-threads.md): handing work from other threads to the UI.
 10. [Custom widgets](10-custom-widgets.md): a node of your own, and its island twin.
 11. [Testing](11-testing.md): headless hosts, input, screenshots.
+12. [Windows](12-windows.md): more top-level windows, sharing the app.
 
 ## Examples
 
@@ -24,7 +25,8 @@ for each example. From `examples/`:
 ```sh
 dub test                   # every example's tests, headless
 dub run -- todo            # opens one example: counter, profile, shell, export,
-                           # todo, log, table, editor, sensors, downloads, rating
+                           # todo, log, table, editor, sensors, downloads,
+                           # rating, windows
 dub run -c hello           # the program of chapter 1
 ```
 

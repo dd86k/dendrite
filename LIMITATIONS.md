@@ -4,13 +4,15 @@ Known gaps, by area.
 
 ## Platform
 
-- One top-level window per process, no second window with its own UI tree.
-  The SDL3 platform owns SDL, reads the events of every window (its popup
-  windows included) and quits SDL when it closes.
+- Windows past the main one: no dragging between windows, such as a dock
+  tab torn out into a window of its own, no modal or child windows, and no
+  placing a window on screen. Only the main window waits for vertical blank.
+  Tried on X11 only. The SDL3 platform owns SDL, reads the events of every
+  window and quits SDL when the main window closes.
 - Popup windows: only tried on X11. Without a compositor the shadow room
   around them shows black. Each opens its own GL context, about 10 ms with
   llvmpipe. Dialogs and other centered popups stay inside the window.
-  Screenshots hold the main window only.
+  Screenshots hold the window only, not its popup windows.
 - Popup windows on Wayland: the window's place on screen is unknown, so
   popups are placed as if it sat at its display's top left. The compositor
   moves those that do not fit, and a press in the main window where the

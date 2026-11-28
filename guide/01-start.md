@@ -53,8 +53,8 @@ What each part does:
   `fontData` and `fallbackFontData` take file bytes instead, such as from
   `import("Inter.otf")`. `w.setFont(FontKind.ui, path)` swaps a font while
   the app runs.
-- `scope Window w` opens the window and closes it at scope exit. One window
-  per process for now.
+- `scope Window w` opens the main window and closes it at scope exit.
+  Chapter 12 opens more.
 - The UI is built once, inside `effectScope`. Builders like `label` and
   `button` create bindings (effects) that belong to the scope current when
   they run, so `root` owns every binding of the window. Chapter 2 covers

@@ -22,7 +22,9 @@ enum RendererKind
     software, /// CPU rasterizer
 }
 
-/// Window settings, read by the platform and the host.
+/// Window settings, read by the platform and the host. A window opened next to the main one with `Host.openWindow`
+/// reads only `title`, the sizes, `scale`, `maxFps`, `hidden`, `cachePaint`, `accessibility`, `popupWindows` and
+/// `scrollDrag`, the rest is shared with the main window.
 struct WindowOptions
 {
     string title = "dentrite";   /// window title
@@ -98,7 +100,8 @@ enum EventKind
 struct Event
 {
     EventKind kind;      /// kind of event
-    uint surface;        /// popup window the event came from, see `PopupWindow.id`, 0 for the main window
+    uint window;         /// top-level window the event came from, see `TopWindow.id`, 0 for the main window
+    uint surface;        /// popup window of `window` the event came from, see `PopupWindow.id`, 0 for `window` itself
     PointerKind pointer; /// `pointer`: move, down or up
     Point pos;           /// `pointer`, `wheel`, `fileHover`, `fileDrop`: position in physical pixels within `surface`
     ubyte button;        /// `pointer`: 1 left, 2 middle, 3 right
@@ -202,8 +205,8 @@ interface Trays
     TrayIcon openTray(Image icon, string tooltip, const(TrayEntry)[] menu, void delegate(size_t) pressed);
 }
 
-/// OS window showing one popup, from `PopupWindows.openPopup`. Rectangles are in physical pixels from the main
-/// window's top left.
+/// OS window showing one popup, from `PopupWindows.openPopup`. Rectangles are in physical pixels from the top
+/// left of the window it belongs to.
 interface PopupWindow
 {
     uint id();                                   /// `Event.surface` of the events from this window, not 0
@@ -212,30 +215,54 @@ interface PopupWindow
     void close();                                /// destroys the window, safe to call twice
 }
 
-/// Platform that can show popups in OS windows of their own, so they reach past the main window.
+/// Window that can show popups in OS windows of their own, so they reach past it.
 interface PopupWindows
 {
-    /// Room popups may take, such as the display's work area, in physical pixels from the main window's top
-    /// left. Empty for none.
+    /// Room popups may take, such as the display's work area, in physical pixels from the window's top left.
+    /// Empty for none.
     Rect popupArea();
-    /// Opens a window at `r` above `parent`, or above the main window if null. `input` false lets the pointer
+    /// Opens a window at `r` above `parent`, or above the window if null. `input` false lets the pointer
     /// through and leaves keyboard focus alone, as for a tooltip. Null if it failed.
     PopupWindow openPopup(PopupWindow parent, Rect r, bool input);
 }
 
-/// Window system side of a host: window, events, clipboard, cursor, presenting.
-interface Platform
+/// One top-level window of a platform: size, presenting, cursor and text input. A `Platform` is the main one. The
+/// optional interfaces about a window, such as `WindowControl`, `PopupWindows`, `FileDialogs` and
+/// `dentrite.access.AccessAdapter`, apply to the window that implements them.
+interface PlatformWindow
 {
-    Metrics metrics();                        /// framebuffer size and display scale
-    bool wait(ref Event e, Duration timeout); /// next event within `timeout`, no limit for `Duration.max`
-    void present();                           /// shows what the renderer drew
-    void setCursor(CursorShape shape);        /// pointer shape over the window
+    Metrics metrics();                 /// framebuffer size and display scale
+    void present();                    /// shows what the renderer drew
+    void setCursor(CursorShape shape); /// pointer shape over the window
     /// Starts or stops text events, which drops any composition. `hidden` for a password, input methods off.
     void textInput(bool on, bool hidden);
-    void textInputArea(Rect caret);           /// caret in physical pixels, where an input method shows candidates
+    void textInputArea(Rect caret);    /// caret in physical pixels, where an input method shows candidates
+    /// Closes the window. For a `Platform`, also every other window and what the platform holds.
+    void close();
+}
+
+/// Window system side of a host: the main window, events for every window, clipboard.
+interface Platform : PlatformWindow
+{
+    bool wait(ref Event e, Duration timeout); /// next event within `timeout`, no limit for `Duration.max`
     string clipboard();                       /// clipboard text, or null
     void setClipboard(string s);              /// sets the clipboard
-    void close();                             /// closes the window and frees what the platform holds
+}
+
+/// Top-level window past the main one, from `Windows.openWindow`. Rectangles of its popups are from its own top
+/// left.
+interface TopWindow : PlatformWindow
+{
+    uint id();           /// `Event.window` of the events from this window, not 0
+    Renderer renderer(); /// draws its frames, made with it and disposed by the host before `close`
+}
+
+/// Platform that can open top-level windows past the main one, see `Host.openWindow`.
+interface Windows
+{
+    /// Opens a window with the title, sizes, `scale`, `hidden`, `accessibility` and `popupWindows` of `o`, or
+    /// null if it failed.
+    TopWindow openWindow(ref const WindowOptions o);
 }
 
 /// Draws frames for a platform.
