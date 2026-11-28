@@ -16,6 +16,7 @@ import dentrite.widgets.tabs : TabInfo, TabLook, TabStrip, paintRow, paintSlot, 
 import std.algorithm.comparison : max, min;
 import std.algorithm.mutation : remove;
 import std.algorithm.searching : countUntil;
+import std.array : replace;
 import std.math : round;
 import std.json;
 
@@ -798,6 +799,24 @@ struct DockStyle
     float size = 12;       /// title size
 }
 
+/// What screen readers hear during a keyboard move, see `DockView.startMove`. `%s` stands for a pane title.
+/// Replace it for other languages.
+struct MoveWords
+{
+    string into = "Into %s";                       /// tab in the stack showing pane `%s`
+    string left = "Left of %s";                    /// split beside that stack
+    string right = "Right of %s";                  /// split beside that stack
+    string above = "Above %s";                     /// split beside that stack
+    string below = "Below %s";                     /// split beside that stack
+    string edgeLeft = "Left edge of the dock";     /// side of the main area
+    string edgeRight = "Right edge of the dock";   /// side of the main area
+    string edgeTop = "Top edge of the dock";       /// side of the main area
+    string edgeBottom = "Bottom edge of the dock"; /// side of the main area
+    string none = "No place chosen";               /// no drop button chosen
+    /// Name before the first arrow key, `%s` being the moved pane.
+    string help = "Moving %s. Arrow keys pick where, Enter docks, Escape cancels.";
+}
+
 /// Part of the dock under the pointer.
 private struct DockHit
 {
@@ -920,6 +939,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
     /// Smallest content size of a stack, under its tab bar. Splitter drags, floating window resizes and side drop
     /// buttons keep to it. A window too small for every pane still squeezes them.
     Size minPane = Size(40, 40);
+    MoveWords moveWords; /// what screen readers hear during a keyboard move
 
     private DockHit hot;         /// under the pointer
     private Drag mode;           /// what the press drags
@@ -947,6 +967,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
     private string closingPane;  /// pane of `closing`
     private DockNode aim;        /// stack a keyboard move is at
     private Node keptFocus;      /// keyboard focus before a keyboard move, given back after
+    private bool stepped;        /// an arrow key moved the target since the keyboard move started
 
     /// Creates a view of `space` showing `panes`.
     this(DockSpace space, Node[string] panes, string[string] titles)
@@ -1176,6 +1197,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
         }
         mode = Drag.keys;
         moving = pane;
+        stepped = false;
         setHot(DockHit.init);
         aimAt(st, Zone.center);
         if (tree.services !is null)
@@ -1418,6 +1440,7 @@ final class DockView : Node, WindowKeys, AccessPartTree
     /// stack that way, past the last one to side `d` of the main area. The other way leads back to the center.
     private void stepMove(Zone d)
     {
+        stepped = true;
         Zone back = d == Zone.left ? Zone.right : d == Zone.right ? Zone.left : d == Zone.top ? Zone.bottom
             : Zone.top;
         if (drop.kind == Drop.Kind.outer)
@@ -1527,7 +1550,8 @@ final class DockView : Node, WindowKeys, AccessPartTree
     }
 
     /// Number of items exposed to screen readers: per stack a tab list holding its tabs, then a pane named by the
-    /// chosen tab holding its content. Lists them anew, so the other item calls refer to this update.
+    /// chosen tab holding its content, and last the target of a keyboard move. Lists them anew, so the other item
+    /// calls refer to this update.
     size_t accessPartCount()
     {
         items = null;
@@ -1558,10 +1582,15 @@ final class DockView : Node, WindowKeys, AccessPartTree
         {
             walk(f.root);
         }
+        if (mode == Drag.keys)
+        {
+            items ~= AccessItem(null, Role.group, 0, -1);
+        }
         return items.length;
     }
 
-    /// Item `i`: a tab named by its title, selected when chosen, a pane named by its chosen tab, or a tab list.
+    /// Item `i`: a tab named by its title, selected when chosen, a pane named by its chosen tab, a tab list, or the
+    /// target of a keyboard move named by `moveWords`.
     void describePart(size_t i, ref AccessInfo a, ref Rect r)
     {
         AccessItem it = items[i];
@@ -1579,6 +1608,11 @@ final class DockView : Node, WindowKeys, AccessPartTree
             a.selected = tri(it.tab == it.stack.active);
             a.allow(AccessAction.click);
             r = tabRects(it.stack, s)[it.tab].translate(at);
+            break;
+        case Role.group:
+            a.label = moveTarget();
+            a.allow(AccessAction.focus);
+            r = moveArea().translate(at);
             break;
         default:
             a.label = titleOf(it.stack.panes[it.tab]);
@@ -1628,10 +1662,49 @@ final class DockView : Node, WindowKeys, AccessPartTree
         return true;
     }
 
-    /// No item takes focus.
+    /// Target of a keyboard move while one is on, else none.
     ptrdiff_t accessFocusPart()
     {
-        return -1;
+        return mode == Drag.keys && items.length > 0 && items[$ - 1].role == Role.group ? items.length - 1 : -1;
+    }
+
+    /// Words for where a keyboard move would dock its pane, or how to use it before the first arrow key, see
+    /// `moveWords`.
+    private string moveTarget()
+    {
+        MoveWords w = moveWords;
+        if (stepped == false)
+        {
+            return w.help.replace("%s", titleOf(moving));
+        }
+        final switch (drop.kind)
+        {
+        case Drop.Kind.none:
+        case Drop.Kind.tab:
+            return w.none;
+        case Drop.Kind.zone:
+            string[Zone.max + 1] by = [w.none, w.into, w.left, w.right, w.above, w.below];
+            DockNode st = drop.stack;
+            return by[drop.zone].replace("%s", st.panes.length == 0 ? "" : titleOf(st.panes[st.active]));
+        case Drop.Kind.outer:
+            string[Zone.max + 1] by = [w.none, w.none, w.edgeLeft, w.edgeRight, w.edgeTop, w.edgeBottom];
+            return by[drop.zone];
+        }
+    }
+
+    /// Area a keyboard move would fill, or the stack it is at when none, local.
+    private Rect moveArea()
+    {
+        final switch (drop.kind)
+        {
+        case Drop.Kind.none:
+        case Drop.Kind.tab:
+            return aim.rect;
+        case Drop.Kind.zone:
+            return DockSpace.preview(drop.stack, drop.zone);
+        case Drop.Kind.outer:
+            return space.outerPreview(drop.zone);
+        }
     }
 
     /// Title of pane `id`.
@@ -3238,6 +3311,74 @@ unittest
     assert(v.startMove());
     h.setFocus(ps["watch"]);
     assert(v.movingByKeys == false && h.focused is ps["watch"], "losing focus cancels");
+}
+
+// Screen readers get the target of a keyboard move as the focused item, named by `moveWords`.
+unittest
+{
+    import dentrite.access : AccessDemand, AccessNode;
+    import dentrite.backend.software : SoftwareRenderer;
+    import dentrite.headless : HeadlessPlatform;
+    import dentrite.host : Host;
+    import dentrite.platform : WindowOptions;
+    import dentrite.widgets.button : button;
+
+    WindowOptions o;
+    o.accessibility = true;
+    o.fonts = ["fonts/Inter-Regular.otf", "fonts/Inter-SemiBold.otf", "fonts/JetBrainsMono-Regular.ttf"];
+    HeadlessPlatform p = new HeadlessPlatform(1004, 604);
+    Host h = new Host(p, new SoftwareRenderer, o);
+    scope (exit)
+    {
+        h.close();
+    }
+    Node[string] ps;
+    foreach (string id; ["source", "breakpoints", "watch", "memory"])
+    {
+        ps[id] = button(id);
+    }
+    DockView v = new DockView(sample(), ps, ["source": "Source", "breakpoints": "Breakpoints", "memory": "Memory"]);
+    p.listening = AccessDemand.full;
+    h.setRoot(v);
+    h.frame();
+    assert(h.access.find(Role.group, "No place chosen") is null, "only during a move");
+
+    /// The focused item after a frame.
+    const(AccessNode)* focused()
+    {
+        h.frame();
+        const(AccessNode)* n = h.access.find(p.accessUpdates[$ - 1].focus);
+        assert(n !is null);
+        return n;
+    }
+
+    v.select("breakpoints");
+    v.startMove();
+    const(AccessNode)* n = focused();
+    assert(n.info.role == Role.group && n.info.allows(AccessAction.focus));
+    assert(n.info.label == "Moving Breakpoints. Arrow keys pick where, Enter docks, Escape cancels.");
+    assert(n.bounds == v.space.find("watch").rect.translate(v.bounds.pos));
+    ulong id = n.id;
+    h.injectKey(Key.left);
+    n = focused();
+    assert(n.id == id && n.info.label == "Left of Breakpoints", "one item, renamed");
+    h.injectKey(Key.left);
+    h.injectKey(Key.right);
+    h.injectKey(Key.right);
+    assert(focused().info.label == "No place chosen", "back on its own stack");
+    h.injectKey(Key.left);
+    h.injectKey(Key.left);
+    assert(focused().info.label == "Into Source");
+    h.injectKey(Key.left);
+    h.injectKey(Key.left);
+    assert(focused().info.label == "Left edge of the dock");
+    v.moveWords.edgeLeft = "Bord gauche";
+    h.injectKey(Key.up);
+    h.injectKey(Key.left);
+    n = focused();
+    assert(n.info.label == "Bord gauche" && n.bounds == v.space.outerPreview(Zone.left).translate(v.bounds.pos));
+    h.injectKey(Key.escape);
+    assert(focused().id == ps["breakpoints"].accessId && h.access.find(Role.group, "Bord gauche") is null);
 }
 
 // Close buttons and middle clicks ask `onCloseRequest`, which may remove the pane or keep it.

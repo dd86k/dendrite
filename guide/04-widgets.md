@@ -104,7 +104,8 @@ forNext: true)` does the same for the control declared next.
 its changes, for a status line. `Live.assertive` interrupts them, for
 urgent alerts. A dock view exposes each stack as a tab list followed by a
 pane named by the chosen tab, and choosing a tab from a screen reader
-switches it.
+switches it. During a keyboard move it names where Enter would dock the
+pane, in words from `moveWords`, which can be translated.
 Text fields report where each character is, and screen readers can move
 their caret and selection. Table rows expose a cell per column, with its
 row and column.

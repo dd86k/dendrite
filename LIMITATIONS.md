@@ -134,6 +134,4 @@ Known gaps, by area.
 ## Dock
 
 - Floating windows stay inside the main window.
-- A keyboard move shows its target on screen only, screen readers are not
-  told.
 - Losing window focus mid-drag drops the tab.
