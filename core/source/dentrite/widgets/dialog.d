@@ -49,7 +49,7 @@ final class Dialog : Node
     private int result = -1;  /// button that closed the dialog
 
     /// Creates a dialog around `content` with buttons captioned `captions`.
-    this(string title, Node content, string[] captions, int primary, string primaryVariant,
+    this(string title, Node content, string[] captions, int primary, string primaryVariant, string[] variants,
         void delegate(int) onClose)
     {
         this.title = title;
@@ -58,7 +58,12 @@ final class Dialog : Node
         Node[] row_;
         foreach (size_t i, string c; captions)
         {
-            Button b = .button(c, onClick: closer(cast(int) i), variant: i == primary ? primaryVariant : null);
+            string v = i < variants.length ? variants[i] : null;
+            if (v is null && i == primary)
+            {
+                v = primaryVariant;
+            }
+            Button b = .button(c, onClick: closer(cast(int) i), variant: v);
             buttons ~= b;
             row_ ~= b;
         }
@@ -230,11 +235,12 @@ struct DialogSpec
     string[] buttons;          /// button captions, left to right
     int primary;               /// index of the button Enter presses, -1 for none
     string primaryVariant;     /// button variant of the main button
+    string[] variants;         /// button variants by index, null entries leave the main button to `primaryVariant`
     float width;               /// fixed width, 0 to fit the content
     void delegate(int) onClose; /// runs with the chosen button, -1 for Escape
 
     /// Stores the options. Needed because `opCall` hides the struct literal.
-    this(string title, string[] buttons, int primary, string primaryVariant, float width,
+    this(string title, string[] buttons, int primary, string primaryVariant, string[] variants, float width,
         void delegate(int) onClose)
     {
         this.width = width;
@@ -242,13 +248,14 @@ struct DialogSpec
         this.buttons = buttons;
         this.primary = primary;
         this.primaryVariant = primaryVariant;
+        this.variants = variants;
         this.onClose = onClose;
     }
 
     /// The closed dialog around `content`.
     Dialog opCall(Node content)
     {
-        Dialog d = new Dialog(title, content, buttons, primary, primaryVariant, onClose);
+        Dialog d = new Dialog(title, content, buttons, primary, primaryVariant, variants, onClose);
         d.width = width;
         return d;
     }
@@ -257,10 +264,11 @@ struct DialogSpec
 /// Closed dialog: `dialog("Remove breakpoints?", buttons: ["Cancel", "Remove"], primary: 1,
 /// primaryVariant: "danger", onClose: (int b) { if (b == 1) remove(); })(label(...))`, then `open(tree)`. Content
 /// that fills its width, such as a text box, makes the dialog as wide as the style allows unless `width` is set.
+/// `variants` styles other buttons, such as `["danger", null, null]` for a red `Don't Save` beside a blue main Save.
 DialogSpec dialog(string title, string[] buttons = ["OK"], int primary = 0, string primaryVariant = "primary",
-    float width = 0, void delegate(int) onClose = null)
+    string[] variants = null, float width = 0, void delegate(int) onClose = null)
 {
-    return DialogSpec(title, buttons, primary, primaryVariant, width, onClose);
+    return DialogSpec(title, buttons, primary, primaryVariant, variants, width, onClose);
 }
 
 // Opening focuses the content, Tab stays inside, presses below do nothing, Escape cancels, Enter presses the
@@ -361,4 +369,17 @@ unittest
     assert(h.focused is d.button(0) && sv.scrollY > 0, "the buttons stay in view");
     h.injectWheel(sv.bounds.pos + Point(10, 10), -10_000);
     assert(sv.scrollY == 0);
+}
+
+// Variants style buttons by index, and a null entry leaves the main button to primaryVariant.
+unittest
+{
+    import dentrite.widgets.label : label;
+
+    Dialog d = dialog("Unsaved changes", buttons: ["Don't Save", "Cancel", "Save"], primary: 2,
+        variants: ["danger"])(label("Save first?"));
+    assert(d.button(0).variant == "danger" && d.button(1).variant is null && d.button(2).variant == "primary");
+    d = dialog("Unsaved changes", buttons: ["Don't Save", "Save"], primary: 1, variants: [null, "toolbar"])(
+        label("Save first?"));
+    assert(d.button(0).variant is null && d.button(1).variant == "toolbar", "an entry overrides primaryVariant");
 }

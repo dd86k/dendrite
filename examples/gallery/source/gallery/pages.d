@@ -1522,6 +1522,11 @@ Node dialogsPage(Gallery g)
             options ~= checkbox(signal(what.length % 2 == 0), what);
         }
     }
+    Dialog unsaved = dialog("Save changes to notes.txt?", buttons: ["Don't Save", "Cancel", "Save"], primary: 2,
+        variants: ["danger"], onClose: (int b) {
+            result.set(b == 2 ? "Saved" : b == 0 ? "Discarded the changes" : "Kept editing");
+        })(
+        label("Your changes are lost if you don't save them.", wrap: true));
     Dialog settings = dialog("Settings", buttons: ["Cancel", "Save"], primary: 1, width: 360,
         onClose: (int b) { result.set(b == 1 ? "Saved the settings" : "Settings unchanged"); })(
         column(gap: 6, cross: CrossAlign.start)(options));
@@ -1544,6 +1549,7 @@ Node dialogsPage(Gallery g)
             line(
                 button("Remove breakpoints", onClick: () { confirm.open(g.host); }, variant: "danger"),
                 button("Rename", onClick: () { rename.open(g.host); }),
+                button("Close file", onClick: () { unsaved.open(g.host); }),
                 button("About", onClick: () { about.open(g.host); }),
                 button("Settings", onClick: () { settings.open(g.host); }),
             ),

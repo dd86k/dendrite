@@ -106,12 +106,13 @@ hidden window.
 
 ## Dialogs
 
-`dialog(title, buttons:, primary:, primaryVariant:, width:, onClose:)(content)`
-builds a closed modal dialog. `d.open(tree)` shows it centered over the
-window. `onClose` gets the index of the pressed button, or -1 for Escape.
-Enter presses the primary button unless it is disabled, Tab stays inside,
-and focus goes back where it was. `d.button(i)` returns a button, to bind
-its enabled state:
+`dialog(title, buttons:, primary:, primaryVariant:, variants:, width:, onClose:)(content)`
+builds a closed modal dialog. `variants` styles buttons by index, such as
+`["danger", null, null]` for a red Don't Save beside Cancel and a blue
+Save. `d.open(tree)` shows it centered over the window. `onClose` gets the
+index of the pressed button, or -1 for Escape. Enter presses the primary
+button unless it is disabled, Tab stays inside, and focus goes back where
+it was. `d.button(i)` returns a button, to bind its enabled state:
 
 ```d
 effect(() { rename.button(1).setEnabled(name.get.length > 0); });
